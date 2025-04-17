@@ -131,6 +131,50 @@ uv run python -c "from youtube_knowledgebase_mcp.mcp_tools import add_video_summ
 uv run python -c "from youtube_knowledgebase_mcp.mcp_tools import filter_videos; print(filter_videos(channel='Tech Channel'))"
 ```
 
+## Connecting to Claude Desktop
+
+One of the greatest advantages of MCP servers is their ability to connect with any compatible LLM, allowing you to leverage powerful AI capabilities to explore your knowledge base in natural language. Here's how to connect your YouTube Transcript Knowledge Base MCP server to Claude Desktop:
+
+### Setting Up Claude Desktop for Your MCP Server
+
+1. **Install Claude Desktop**: Make sure you have the latest version of [Claude for Desktop](https://claude.ai/desktop) installed on your computer.
+
+2. **Configure Claude Desktop**: Open the Claude Desktop app configuration file:
+   ```
+   ~/Library/Application Support/Claude/claude_desktop_config.json
+   ```
+   Create this file if it doesn't exist.
+
+3. **Add Your MCP Server**: Add your YouTube knowledge base server to the configuration file:
+   ```json
+   {
+     "mcpServers": {
+       "youtube-kb": {
+         "command": "uv",
+         "args": [
+           "--directory",
+           "/ABSOLUTE/PATH/TO/YouTube_MCP",
+           "run",
+           "main.py"
+         ]
+       }
+     }
+   }
+   ```
+   Replace `/ABSOLUTE/PATH/TO/YouTube_MCP` with the actual path to your project.
+
+4. **Restart Claude Desktop**: Save the file and restart Claude Desktop for the changes to take effect.
+
+### Using Your Knowledge Base with Claude
+
+Once connected, you'll see a hammer icon in the Claude Desktop interface indicating that tools are available. You can now ask Claude questions about your YouTube videos:
+
+
+- "Find information about machine learning from my tech tutorials playlist."
+- "Show me key points about financial planning from my finance videos."
+
+Claude will use your YouTube Knowledge Base MCP server to search through your transcripts and return relevant information along with timestamps and video sources.
+
 ## Project Structure
 
 - `main.py`: Launches the MCP server.
