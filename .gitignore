@@ -18,6 +18,10 @@ processed_data/
 youtube_faiss_index/
 youtube_faiss_index_bak_*/
 
+# for local testing
+scratch/*
+
+
 # Misc directory
 misc/
 
