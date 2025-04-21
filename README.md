@@ -73,6 +73,70 @@ Then, add your OpenAI API key to `.env`:
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
+### No OpenAI API Key? No Problem!
+
+Don't have an OpenAI API key? This project supports alternative embedding options:
+
+- If you don't provide an OpenAI API key, the system will **automatically use Ollama** (a local embedding model) as a fallback
+- You can also **explicitly choose** which embedding model to use in your code
+
+#### Setting Up Ollama (for API-Free Usage)
+
+To use Ollama embeddings (no API key required):
+
+#### For macOS:
+1. Download Ollama from [https://ollama.com/download](https://ollama.com/download)
+2. Install the application by opening the .dmg file and dragging Ollama to your Applications folder
+3. Launch Ollama from your Applications folder
+4. Pull the latest model (first time only):
+   ```bash
+   ollama pull llama3.2
+   ```
+
+#### For Linux:
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Start the Ollama service
+ollama serve
+
+# Download the latest language model
+ollama pull llama3.2
+```
+
+#### For Windows:
+1. Download Ollama from [https://ollama.com/download](https://ollama.com/download)
+2. Run the installer and follow the instructions
+3. Launch Ollama from the Start menu
+4. Pull the latest model (first time only):
+   ```bash
+   ollama pull llama3.2
+   ```
+
+#### Don't want to install Ollama? Use HuggingFace Instead
+
+If you prefer not to install Ollama, the system will automatically fall back to using HuggingFace embeddings, which require no local installation or API key. HuggingFace embeddings work directly out of the box, though they may be slightly less performant than Ollama or OpenAI embeddings. The system handles this fallback transparently.
+
+#### Choosing Your Embedding Type
+
+```python
+# In your code or notebook
+from youtube_knowledgebase_mcp.vector_store import get_or_create_faiss_index
+
+# Default (tries OpenAI first, then falls back to alternatives)
+vectorstore = get_or_create_faiss_index(FAISS_INDEX_PATH)
+
+# Explicitly choose Ollama (local, no API key needed)
+vectorstore = get_or_create_faiss_index(FAISS_INDEX_PATH, embedding_type="ollama")
+
+# Explicitly choose HuggingFace (no API key needed)
+vectorstore = get_or_create_faiss_index(FAISS_INDEX_PATH, embedding_type="huggingface")
+
+# Explicitly choose OpenAI (requires API key)
+vectorstore = get_or_create_faiss_index(FAISS_INDEX_PATH, embedding_type="openai")
+```
+
 ### Managing Dependencies with uv
 
 This project uses `pyproject.toml` for dependency management with uv:
@@ -174,6 +238,7 @@ Once connected, you'll see a hammer icon in the Claude Desktop interface indicat
 - "Show me key points about financial planning from my finance videos."
 
 Claude will use your YouTube Knowledge Base MCP server to search through your transcripts and return relevant information along with timestamps and video sources.
+
 
 ## Project Structure
 

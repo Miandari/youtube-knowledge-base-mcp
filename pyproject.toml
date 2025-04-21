@@ -24,7 +24,10 @@ dependencies = [
     "httpx",
     "psycopg2-binary",
     "ipykernel",
-    "jupyterlab"
+    "jupyterlab",
+    "langchain-ollama",   
+    "langchain-huggingface",
+    "sentence-transformers"  
 ]
 
 [dependency-groups]

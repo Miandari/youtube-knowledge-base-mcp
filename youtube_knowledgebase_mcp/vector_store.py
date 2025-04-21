@@ -15,7 +15,96 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain.docstore.document import Document
 
-def update_faiss_with_summary(video_id: str, summary: str, data_path: str, faiss_index_path: str) -> None:
+# Import alternative embedding models
+from langchain_community.embeddings import OllamaEmbeddings, HuggingFaceEmbeddings
+from langchain_core.embeddings import Embeddings
+
+def get_embeddings_model(embedding_type: str = None) -> Embeddings:
+    """
+    Get an appropriate embeddings model based on available API keys or local models.
+    
+    Args:
+        embedding_type (str, optional): Explicitly choose an embedding model type.
+            Options: 'openai', 'ollama', 'huggingface', or None (for automatic selection)
+    
+    Returns:
+        An embeddings model instance that can be used with FAISS.
+    """
+    # If embedding type is explicitly specified, use that
+    if embedding_type:
+        embedding_type = embedding_type.lower()
+        if embedding_type == 'openai':
+            if not os.environ.get("OPENAI_API_KEY"):
+                raise ValueError("OpenAI API key is required but not found in environment variables")
+            return OpenAIEmbeddings(model="text-embedding-3-large")
+        elif embedding_type == 'ollama':
+            # Check if Ollama is running before trying to connect
+            try:
+                import requests
+                response = requests.get("http://localhost:11434/api/tags", timeout=2)
+                if response.status_code != 200:
+                    raise ValueError("Ollama server is not responding correctly. Make sure it's running with 'ollama serve'")
+                return OllamaEmbeddings(model="llama2")
+            except requests.exceptions.RequestException as e:
+                raise ValueError(f"Cannot connect to Ollama server: {str(e)}. Make sure Ollama is installed and running with 'ollama serve'")
+        elif embedding_type == 'huggingface':
+            return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+        else:
+            raise ValueError(f"Unknown embedding type: {embedding_type}. Choose from 'openai', 'ollama', or 'huggingface'")
+    
+    # Otherwise, automatic selection (try each option in order)
+    errors = []
+    
+    # Try to use OpenAI embeddings if API key is available
+    if os.environ.get("OPENAI_API_KEY"):
+        try:
+            return OpenAIEmbeddings(model="text-embedding-3-large")
+        except Exception as e:
+            errors.append(f"OpenAI embeddings error: {str(e)}")
+            print(f"Error initializing OpenAI embeddings: {str(e)}")
+    else:
+        errors.append("No OpenAI API key found in environment variables")
+    
+    # Try Ollama (local model)
+    try:
+        print("Trying Ollama embeddings...")
+        import requests
+        # Check if Ollama is running before attempting to use it
+        try:
+            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            if response.status_code == 200:
+                return OllamaEmbeddings(model="llama2")
+            else:
+                errors.append(f"Ollama server responded with status code {response.status_code}")
+                raise ValueError(f"Ollama server responded with status code {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            errors.append(f"Cannot connect to Ollama server: {str(e)}")
+            print(f"Cannot connect to Ollama server: {str(e)}. Is Ollama installed and running?")
+            raise ValueError(f"Cannot connect to Ollama server: {str(e)}. Run 'ollama serve' to start the server.")
+    except Exception as e:
+        errors.append(f"Ollama embeddings error: {str(e)}")
+        print(f"Error initializing Ollama embeddings: {str(e)}")
+    
+    # Fall back to HuggingFace embeddings as a last resort
+    try:
+        print("Falling back to HuggingFace embeddings...")
+        return HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    except Exception as e:
+        errors.append(f"HuggingFace embeddings error: {str(e)}")
+        print(f"Error initializing HuggingFace embeddings: {str(e)}")
+        
+    # If all embedding methods failed, raise a detailed error
+    error_message = "Could not initialize any embedding model. Errors encountered:\n"
+    for i, err in enumerate(errors, 1):
+        error_message += f"{i}. {err}\n"
+    error_message += "\nPlease ensure one of the following:\n"
+    error_message += "- Provide an OpenAI API key in the environment variables\n"
+    error_message += "- Install and run Ollama with: curl -fsSL https://ollama.com/install.sh | sh && ollama serve\n"
+    error_message += "- Ensure your internet connection is working for HuggingFace embeddings"
+    
+    raise ValueError(error_message)
+
+def update_faiss_with_summary(video_id: str, summary: str, data_path: str, faiss_index_path: str, embedding_type: str = None) -> None:
     """
     Update FAISS index with video summary.
     
@@ -24,6 +113,7 @@ def update_faiss_with_summary(video_id: str, summary: str, data_path: str, faiss
         summary: Summary text to add to the index
         data_path: Path to data directory
         faiss_index_path: Path to FAISS index
+        embedding_type: Optional embedding type to use ('openai', 'ollama', 'huggingface')
     """
     if not os.path.exists(faiss_index_path):
         return
@@ -51,8 +141,8 @@ def update_faiss_with_summary(video_id: str, summary: str, data_path: str, faiss
             }
         )
         
-        # Add to FAISS index
-        vectorstore = get_or_create_faiss_index(faiss_index_path, [doc])
+        # Add to FAISS index with specified embedding type
+        vectorstore = get_or_create_faiss_index(faiss_index_path, [doc], embedding_type)
         print(f"Updated FAISS index with summary for video {video_id}")
     except Exception as e:
         print(f"Error updating FAISS with summary: {str(e)}")
@@ -213,18 +303,19 @@ def find_timestamp_range(chunk: str, segments: List[Dict[str, Any]]) -> Dict[str
         'endSeconds': segments[-1]['endSeconds']
     }
 
-def get_or_create_faiss_index(faiss_index_path: str, documents=None):
+def get_or_create_faiss_index(faiss_index_path: str, documents=None, embedding_type: str = None):
     """
     Get the existing FAISS index or create a new one.
     
     Args:
         faiss_index_path: Path to FAISS index directory
         documents: Optional list of documents to initialize with
+        embedding_type: Optional embedding type to use ('openai', 'ollama', 'huggingface')
         
     Returns:
         FAISS vector store instance
     """
-    embeddings = OpenAIEmbeddings(model="text-embedding-3-large")
+    embeddings = get_embeddings_model(embedding_type)
     
     # Check if FAISS index exists
     if os.path.exists(faiss_index_path) and os.path.isdir(faiss_index_path):
