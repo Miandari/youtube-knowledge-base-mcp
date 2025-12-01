@@ -202,8 +202,12 @@ class SourceRepository:
         tags: Optional[List[str]] = None,
         collections: Optional[List[str]] = None,
         is_processed: Optional[bool] = None,
+        channel: Optional[str] = None,
+        title_contains: Optional[str] = None,
+        has_summary: Optional[bool] = None,
         limit: int = 100,
         offset: int = 0,
+        sort_by: str = "created_at",
     ) -> List[Source]:
         """
         List sources with optional filtering.
@@ -213,8 +217,12 @@ class SourceRepository:
             tags: Filter by tags (sources must have at least one matching tag)
             collections: Filter by collections
             is_processed: Filter by processing status
+            channel: Filter by channel name (exact match)
+            title_contains: Filter by title (case-insensitive contains)
+            has_summary: Filter by whether source has a user summary
             limit: Maximum number of results
             offset: Number of results to skip
+            sort_by: Sort field - "created_at", "updated_at", or "title"
 
         Returns:
             List of matching Sources
@@ -228,6 +236,11 @@ class SourceRepository:
         if is_processed is not None:
             conditions.append(f"is_processed = {str(is_processed).lower()}")
 
+        if channel:
+            # Escape single quotes in channel name
+            escaped_channel = channel.replace("'", "''")
+            conditions.append(f"channel = '{escaped_channel}'")
+
         # Execute query
         query = self._table.search()
 
@@ -235,10 +248,8 @@ class SourceRepository:
             where_clause = " AND ".join(conditions)
             query = query.where(where_clause)
 
-        results = query.limit(limit + offset).to_list()
-
-        # Apply offset manually (LanceDB doesn't have native offset)
-        results = results[offset:offset + limit]
+        # Get more results to filter in Python
+        results = query.limit(limit * 3 + offset).to_list()
 
         # Convert to Source models
         sources = [self._record_to_source(r) for r in results]
@@ -250,7 +261,28 @@ class SourceRepository:
         if collections:
             sources = [s for s in sources if any(c in s.collections for c in collections)]
 
-        return sources
+        # Filter by title_contains (case-insensitive)
+        if title_contains:
+            title_lower = title_contains.lower()
+            sources = [s for s in sources if title_lower in s.title.lower()]
+
+        # Filter by has_summary
+        if has_summary is not None:
+            if has_summary:
+                sources = [s for s in sources if s.user_summary]
+            else:
+                sources = [s for s in sources if not s.user_summary]
+
+        # Sort results
+        if sort_by == "title":
+            sources.sort(key=lambda s: s.title.lower())
+        elif sort_by == "updated_at":
+            sources.sort(key=lambda s: s.updated_at, reverse=True)
+        else:  # default to created_at
+            sources.sort(key=lambda s: s.created_at, reverse=True)
+
+        # Apply offset and limit
+        return sources[offset:offset + limit]
 
     def count(self) -> int:
         """
@@ -290,3 +322,17 @@ class SourceRepository:
             if collections:
                 all_collections.update(collections)
         return sorted(list(all_collections))
+
+    def count_by_type(self) -> Dict[str, int]:
+        """
+        Count sources grouped by source_type.
+
+        Returns:
+            Dict mapping source_type to count
+        """
+        results = self._table.search().to_list()
+        counts: Dict[str, int] = {}
+        for r in results:
+            source_type = r.get("source_type", "unknown")
+            counts[source_type] = counts.get(source_type, 0) + 1
+        return counts

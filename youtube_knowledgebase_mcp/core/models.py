@@ -2,7 +2,7 @@
 Pydantic models for the knowledge base entities.
 """
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from pydantic import BaseModel, Field
 import uuid
@@ -82,3 +82,39 @@ class SearchResult(BaseModel):
     source_title: str
     source_url: Optional[str] = None
     timestamp_link: Optional[str] = None  # YouTube link with timestamp
+
+
+# === MCP Tool Result Models ===
+
+class ProcessResult(BaseModel):
+    """Result of processing a source."""
+    success: bool
+    source_id: Optional[str] = None
+    title: Optional[str] = None
+    chunk_count: int = 0
+    error: Optional[str] = None
+
+
+class SearchResults(BaseModel):
+    """Search results container."""
+    query: str
+    total_results: int
+    results: List[SearchResult]
+    search_time_ms: float = 0.0
+
+
+class OperationResult(BaseModel):
+    """Generic operation result."""
+    success: bool
+    message: str
+    affected_count: int = 0
+
+
+class StatsResult(BaseModel):
+    """Knowledge base statistics."""
+    total_sources: int
+    total_chunks: int
+    sources_by_type: Dict[str, int]
+    unique_tags: int
+    unique_collections: int
+    embedding_model: str

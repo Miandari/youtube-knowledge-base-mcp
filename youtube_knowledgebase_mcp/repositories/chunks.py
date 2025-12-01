@@ -178,13 +178,15 @@ class ChunkRepository:
         where_clause = " AND ".join(conditions) if conditions else None
 
         # Perform search
-        search_query = self._table.search(
-            query_vector,
-            query_type="hybrid" if query_text else "vector",
-        )
-
+        # For hybrid search in LanceDB, use vector() and text() methods
         if query_text:
-            search_query = search_query.text(query_text)
+            search_query = (
+                self._table.search(query_type="hybrid")
+                .vector(query_vector)
+                .text(query_text)
+            )
+        else:
+            search_query = self._table.search(query_vector, query_type="vector")
 
         if where_clause:
             search_query = search_query.where(where_clause)

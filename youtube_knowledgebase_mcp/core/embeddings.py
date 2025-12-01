@@ -187,7 +187,18 @@ def get_embedding_provider(
     Falls back through providers if preferred one is unavailable.
 
     Fallback order: voyage -> openai -> bge -> ollama
+
+    Note: When falling back, the model parameter is ignored and the default
+    model for the fallback provider is used.
     """
+    # Default models for each provider
+    default_models = {
+        "voyage": "voyage-3-large",
+        "openai": "text-embedding-3-large",
+        "bge": "BAAI/bge-m3",
+        "ollama": "nomic-embed-text",
+    }
+
     providers_to_try = []
 
     # Build ordered list based on preference
@@ -204,16 +215,19 @@ def get_embedding_provider(
 
     errors = []
 
-    for p in providers_to_try:
+    for i, p in enumerate(providers_to_try):
         try:
+            # Use provided model only for the preferred provider, default for fallbacks
+            use_model = model if (i == 0 and model) else default_models.get(p)
+
             if p == "voyage":
-                return VoyageEmbedding(model=model or "voyage-3-large", dimensions=dimensions)
+                return VoyageEmbedding(model=use_model or "voyage-3-large", dimensions=dimensions)
             elif p == "openai":
-                return OpenAIEmbedding(model=model or "text-embedding-3-large", dimensions=dimensions)
+                return OpenAIEmbedding(model=use_model or "text-embedding-3-large", dimensions=dimensions)
             elif p == "bge":
-                return BGEEmbedding(model=model or "BAAI/bge-m3")
+                return BGEEmbedding(model=use_model or "BAAI/bge-m3")
             elif p == "ollama":
-                return OllamaEmbedding(model=model or "nomic-embed-text", dimensions=dimensions)
+                return OllamaEmbedding(model=use_model or "nomic-embed-text", dimensions=dimensions)
         except Exception as e:
             errors.append(f"{p}: {str(e)}")
             continue

@@ -15,7 +15,7 @@ dependencies = [
     "python-dotenv",
     "wikipedia",
     "langchain-openai",
-    "yt-dlp",
+    "yt-dlp>=2025.5",
     "mcp[cli]",
     "langchain-community",
     "faiss-cpu",
