@@ -1,7 +1,7 @@
 [project]
-name = "my-agent-project"
+name = "media-kb-mcp"
 version = "0.1.0"
-description = "Agent project with LLMs, LangChain, and data tools"
+description = "Media Knowledge Base MCP - Semantic search over video transcripts and other media content"
 requires-python = ">=3.10"
 
 dependencies = [
@@ -25,9 +25,12 @@ dependencies = [
     "psycopg2-binary",
     "ipykernel",
     "jupyterlab",
-    "langchain-ollama",   
+    "langchain-ollama",
     "langchain-huggingface",
-    "sentence-transformers"  
+    "sentence-transformers",
+    "lancedb>=0.17.0",
+    "voyageai>=0.3.0",
+    "pydantic>=2.0.0",
 ]
 
 [dependency-groups]
