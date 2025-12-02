@@ -15,6 +15,7 @@ from ...core.embeddings import get_embedding_provider, EmbeddingProvider
 from ...repositories.sources import SourceRepository
 from ...repositories.chunks import ChunkRepository
 from ..chunking import ChunkingService
+from ..context import ContextualizationService, get_context_provider
 
 # Import existing YouTube functions
 from ...youtube_transcript import (
@@ -52,6 +53,7 @@ class YouTubeIngestionService(IngestionService):
         self._source_repo = source_repo or SourceRepository()
         self._chunk_repo = chunk_repo or ChunkRepository()
         self._chunking_service = chunking_service or ChunkingService()
+        self._context_service: Optional[ContextualizationService] = None
 
     @property
     def source_type(self) -> str:
@@ -67,6 +69,32 @@ class YouTubeIngestionService(IngestionService):
                 dimensions=settings.embedding.dimensions,
             )
         return self._embedding_provider
+
+    @property
+    def context_service(self) -> Optional[ContextualizationService]:
+        """Lazy initialization of context service (if enabled)."""
+        if self._context_service is None and settings.context.enabled:
+            try:
+                provider = get_context_provider(
+                    provider=settings.context.provider,
+                    model=settings.context.get_model_name(),
+                )
+                self._context_service = ContextualizationService(
+                    context_provider=provider,
+                    include_summary=settings.context.include_summary,
+                    max_context_tokens=settings.context.max_context_tokens,
+                    summary_sentences=settings.context.summary_sentences,
+                    max_transcript_tokens=settings.context.max_transcript_tokens,
+                    chapter_duration_minutes=settings.context.chapter_duration_minutes,
+                )
+            except Exception as e:
+                # If context service fails to initialize, log and continue without it
+                import logging
+                logging.getLogger(__name__).warning(
+                    f"Context service initialization failed: {e}. "
+                    "Proceeding without contextual retrieval."
+                )
+        return self._context_service
 
     def validate_url(self, url: str) -> bool:
         """
@@ -285,18 +313,41 @@ class YouTubeIngestionService(IngestionService):
                     error="No chunks generated from transcript",
                 )
 
-            # Generate embeddings
-            chunk_texts = [tc.content for tc in text_chunks]
-            embeddings = self.embedding_provider.embed_documents(chunk_texts)
+            # Generate contextual text for improved retrieval
+            context_model = None
+            chunk_contexts = [None] * len(text_chunks)
+            chapter_indices = [None] * len(text_chunks)
+
+            if self.context_service and settings.context.enabled:
+                contextualized = self.context_service.contextualize_chunks(
+                    document=transcript,
+                    chunks=text_chunks,
+                    metadata={
+                        "title": metadata.get("title", ""),
+                        "channel": metadata.get("channel", ""),
+                        "duration": metadata.get("duration", 0),
+                    },
+                )
+                # Use contextual text for embeddings, original content for storage
+                embedding_texts = [c.embedding_text for c in contextualized]
+                chunk_contexts = [c.context for c in contextualized]
+                chapter_indices = [c.chapter_index for c in contextualized]
+                context_model = self.context_service.provider.model_name
+            else:
+                # Fallback: use raw chunk content
+                embedding_texts = [tc.content for tc in text_chunks]
+
+            # Generate embeddings from contextual text
+            embeddings = self.embedding_provider.embed_documents(embedding_texts)
 
             # Create chunk models
             chunks = []
             for i, (text_chunk, embedding) in enumerate(zip(text_chunks, embeddings)):
                 chunk = Chunk(
                     source_id=video_id,
-                    content=text_chunk.content,
+                    content=text_chunk.content,  # Original content for display
                     chunk_index=i,
-                    vector=embedding,
+                    vector=embedding,  # Derived from contextual text
                     timestamp_start=text_chunk.timestamp_start,
                     timestamp_end=text_chunk.timestamp_end,
                     source_type="youtube",
@@ -305,6 +356,13 @@ class YouTubeIngestionService(IngestionService):
                     tags=source.tags,
                     collections=source.collections,
                     embedding_model=self.embedding_provider.model_name,
+                    # Contextual retrieval fields
+                    context=chunk_contexts[i],
+                    context_model=context_model,
+                    chapter_index=chapter_indices[i],
+                    # Future SOTA RAG fields (empty for now)
+                    parent_id=None,
+                    speakers=[],
                 )
                 chunks.append(chunk)
 

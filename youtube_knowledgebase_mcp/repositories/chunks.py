@@ -39,6 +39,13 @@ class ChunkRepository:
             "tags": chunk.tags,
             "collections": chunk.collections,
             "embedding_model": chunk.embedding_model,
+            # Contextual retrieval fields
+            "context": chunk.context,
+            "context_model": chunk.context_model,
+            # Future SOTA RAG fields
+            "parent_id": chunk.parent_id,
+            "speakers": chunk.speakers,
+            "chapter_index": chunk.chapter_index,
             "created_at": chunk.created_at,  # datetime object for PyArrow
         }
 
@@ -58,6 +65,13 @@ class ChunkRepository:
             tags=record.get("tags", []),
             collections=record.get("collections", []),
             embedding_model=record.get("embedding_model", ""),
+            # Contextual retrieval fields
+            context=record.get("context"),
+            context_model=record.get("context_model"),
+            # Future SOTA RAG fields
+            parent_id=record.get("parent_id"),
+            speakers=record.get("speakers", []),
+            chapter_index=record.get("chapter_index"),
             created_at=record.get("created_at", datetime.utcnow()),
         )
 

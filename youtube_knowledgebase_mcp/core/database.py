@@ -12,8 +12,11 @@ import lancedb
 from pathlib import Path
 from typing import Optional
 import pyarrow as pa
+import logging
 
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 # Define PyArrow schemas for LanceDB tables
 SOURCES_SCHEMA = pa.schema([
@@ -52,6 +55,13 @@ def get_chunks_schema(vector_dim: int = 1024) -> pa.Schema:
         pa.field("tags", pa.list_(pa.string())),
         pa.field("collections", pa.list_(pa.string())),
         pa.field("embedding_model", pa.string()),
+        # Contextual retrieval fields
+        pa.field("context", pa.string()),
+        pa.field("context_model", pa.string()),
+        # Future SOTA RAG fields
+        pa.field("parent_id", pa.string()),
+        pa.field("speakers", pa.list_(pa.string())),
+        pa.field("chapter_index", pa.int32()),
         pa.field("created_at", pa.timestamp("us")),
     ])
 
@@ -66,6 +76,7 @@ class Database:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._db = lancedb.connect(str(self.db_path))
         self._ensure_tables()
+        self._migrate_schemas()
 
     @classmethod
     def get_instance(cls) -> "Database":
@@ -95,6 +106,53 @@ class Database:
             except Exception:
                 # Index may already exist or table may be empty
                 pass
+
+    def _migrate_schemas(self):
+        """
+        Add missing columns to existing tables for forward compatibility.
+
+        This handles schema evolution when new fields are added to the models.
+        LanceDB supports adding nullable columns to existing tables.
+        """
+        if "chunks" not in self._db.table_names():
+            return
+
+        try:
+            chunks_table = self._db.open_table("chunks")
+            existing_names = {f.name for f in chunks_table.schema}
+            expected_schema = get_chunks_schema(settings.embedding.dimensions)
+
+            # Find missing fields
+            missing_fields = []
+            for field in expected_schema:
+                if field.name not in existing_names:
+                    missing_fields.append(field.name)
+
+            if missing_fields:
+                logger.info(f"Schema migration needed: adding {missing_fields} to chunks table")
+                # LanceDB requires recreating table or using add_columns
+                # For now, we'll add columns with null values using pyarrow
+                # Note: LanceDB's add_columns API may vary by version
+                try:
+                    # Try the newer API first
+                    for field_name in missing_fields:
+                        # Get the field definition from expected schema
+                        for field in expected_schema:
+                            if field.name == field_name:
+                                # Add column with null default
+                                # LanceDB will fill existing rows with null
+                                chunks_table.add_columns({field_name: None})
+                                logger.info(f"Added column '{field_name}' to chunks table")
+                                break
+                except Exception as e:
+                    # If add_columns fails, log warning but continue
+                    # The repository layer will handle missing fields gracefully
+                    logger.warning(
+                        f"Could not auto-migrate schema: {e}. "
+                        f"New chunks will have all fields, existing chunks may lack: {missing_fields}"
+                    )
+        except Exception as e:
+            logger.warning(f"Schema migration check failed: {e}")
 
     @property
     def sources(self):

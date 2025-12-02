@@ -67,6 +67,15 @@ class Chunk(BaseModel):
     # Embedding metadata
     embedding_model: str = ""
 
+    # Contextual retrieval
+    context: Optional[str] = None  # LLM-generated context for this chunk
+    context_model: Optional[str] = None  # Model used for context generation
+
+    # Future SOTA RAG fields
+    parent_id: Optional[str] = None  # Small-to-Big Retrieval: link to parent chunk
+    speakers: List[str] = Field(default_factory=list)  # Speaker diarization for filtering
+    chapter_index: Optional[int] = None  # Chapter number for long videos
+
     # Timestamps - use datetime objects for PyArrow compatibility
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
