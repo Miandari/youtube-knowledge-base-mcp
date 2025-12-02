@@ -6,6 +6,8 @@ Provides CRUD operations and hybrid search for the chunks table.
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
+from lancedb.rerankers import RRFReranker
+
 from ..core.database import get_db
 from ..core.models import Chunk, SearchResult
 
@@ -147,10 +149,9 @@ class ChunkRepository:
         tags: Optional[List[str]] = None,
         collections: Optional[List[str]] = None,
         limit: int = 10,
-        hybrid_weight: float = 0.7,
     ) -> List[SearchResult]:
         """
-        Perform hybrid search (vector + full-text) on chunks.
+        Perform hybrid search (vector + full-text) on chunks using RRF reranking.
 
         Args:
             query_vector: The query embedding vector
@@ -160,7 +161,6 @@ class ChunkRepository:
             tags: Optional tags filter
             collections: Optional collections filter
             limit: Maximum number of results
-            hybrid_weight: Weight for vector vs FTS (0.0 = FTS only, 1.0 = vector only)
 
         Returns:
             List of SearchResults with scores
@@ -178,12 +178,14 @@ class ChunkRepository:
         where_clause = " AND ".join(conditions) if conditions else None
 
         # Perform search
-        # For hybrid search in LanceDB, use vector() and text() methods
+        # For hybrid search in LanceDB, use vector() and text() methods with RRF reranking
         if query_text:
+            reranker = RRFReranker(K=60, return_score="relevance")
             search_query = (
                 self._table.search(query_type="hybrid")
                 .vector(query_vector)
                 .text(query_text)
+                .rerank(reranker)
             )
         else:
             search_query = self._table.search(query_vector, query_type="vector")
@@ -204,10 +206,20 @@ class ChunkRepository:
             if collections and not any(c in chunk.collections for c in collections):
                 continue
 
-            # Get distance score (lower is better in LanceDB)
-            distance = r.get("_distance", 0.0)
-            # Convert distance to similarity score (1 / (1 + distance))
-            score = 1.0 / (1.0 + distance)
+            # RRF/hybrid returns _relevance_score (higher is better)
+            relevance = r.get("_relevance_score")
+            # FTS returns _score (higher is better)
+            fts_score = r.get("_score")
+            # Vector search returns _distance (lower is better)
+            distance = r.get("_distance")
+
+            if relevance is not None:
+                score = relevance
+            elif fts_score is not None:
+                score = fts_score
+            else:
+                # Fallback for pure vector search
+                score = 1.0 / (1.0 + (distance or 0.0))
 
             search_result = SearchResult(
                 chunk=chunk,

@@ -18,11 +18,8 @@ dependencies = [
     "yt-dlp>=2025.5",
     "mcp[cli]",
     "langchain-community",
-    "faiss-cpu",
-    "scikit-learn",
     "pyarrow",
     "httpx",
-    "psycopg2-binary",
     "ipykernel",
     "jupyterlab",
     "langchain-ollama",
@@ -31,6 +28,7 @@ dependencies = [
     "lancedb>=0.17.0",
     "voyageai>=0.3.0",
     "pydantic>=2.0.0",
+    "tantivy",
 ]
 
 [dependency-groups]

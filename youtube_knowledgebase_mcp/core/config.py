@@ -25,7 +25,7 @@ class EmbeddingConfig(BaseModel):
             "voyage": "voyage-3-large",
             "openai": "text-embedding-3-large",
             "bge": "BAAI/bge-m3",
-            "ollama": "nomic-embed-text",
+            "ollama": "mxbai-embed-large",
         }
         return defaults[self.provider]
 

@@ -2,12 +2,18 @@
 Chunking service for splitting text into semantic chunks.
 
 Implements sentence-boundary aware splitting with configurable chunk size and overlap.
+Supports semantic chunking based on embedding similarity when an embedding provider is available.
 """
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
 
+import numpy as np
+
 from ..core.config import settings
+
+if TYPE_CHECKING:
+    from ..core.embeddings import EmbeddingProvider
 
 
 @dataclass
@@ -26,6 +32,9 @@ class ChunkingService:
     Service for splitting text into semantic chunks.
 
     Uses sentence-boundary aware splitting to avoid cutting mid-sentence.
+    When an embedding provider is available, uses semantic similarity to detect
+    topic shifts and create more coherent chunks.
+
     Configurable chunk size (~500 chars default) and overlap (150 chars default).
     """
 
@@ -33,6 +42,8 @@ class ChunkingService:
         self,
         chunk_size: Optional[int] = None,
         chunk_overlap: Optional[int] = None,
+        embedding_provider: Optional["EmbeddingProvider"] = None,
+        context_window_size: int = 1,
     ):
         """
         Initialize the chunking service.
@@ -40,9 +51,14 @@ class ChunkingService:
         Args:
             chunk_size: Target chunk size in characters (default from settings)
             chunk_overlap: Overlap between chunks in characters (default from settings)
+            embedding_provider: Provider for generating embeddings (enables semantic chunking)
+            context_window_size: Number of sentences before/after to include when embedding.
+                                 Default 1 means 3 sentences total. Set to 0 to disable.
         """
         self.chunk_size = chunk_size or settings.chunk_size
         self.chunk_overlap = chunk_overlap or settings.chunk_overlap
+        self._embedding_provider = embedding_provider
+        self.context_window_size = context_window_size
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """
@@ -110,6 +126,117 @@ class ChunkingService:
                 merged.append(buffer)
 
         return merged
+
+    def _combine_with_context(self, sentences: List[str]) -> List[str]:
+        """
+        Combine each sentence with neighbors for better embedding context.
+
+        Uses self.context_window_size to determine how many sentences
+        before/after to include. Default is 1 (3 sentences total).
+        Set to 0 to disable context window.
+        """
+        if self.context_window_size == 0:
+            return sentences
+
+        combined = []
+        window = self.context_window_size
+        for i in range(len(sentences)):
+            start = max(0, i - window)
+            end = min(len(sentences), i + window + 1)
+            combined.append(" ".join(sentences[start:end]))
+        return combined
+
+    def _calculate_cosine_distances(self, embeddings: List[List[float]]) -> List[float]:
+        """Calculate cosine distance between consecutive embeddings."""
+        distances = []
+        for i in range(len(embeddings) - 1):
+            vec_a = np.array(embeddings[i])
+            vec_b = np.array(embeddings[i + 1])
+            norm_a = np.linalg.norm(vec_a)
+            norm_b = np.linalg.norm(vec_b)
+            if norm_a == 0 or norm_b == 0:
+                distances.append(1.0)  # Max distance for zero vectors
+            else:
+                similarity = np.dot(vec_a, vec_b) / (norm_a * norm_b)
+                distances.append(1 - similarity)  # Convert to distance
+        return distances
+
+    def _find_breakpoints(self, distances: List[float], percentile: int = 80) -> List[int]:
+        """Find indices where semantic shift exceeds threshold."""
+        if not distances:
+            return []
+        threshold = np.percentile(distances, percentile)
+        return [i for i, d in enumerate(distances) if d > threshold]
+
+    def chunk_semantically(self, text: str) -> List[TextChunk]:
+        """
+        Split text into chunks based on semantic similarity.
+
+        Detects topic shifts by comparing embedding similarity between
+        consecutive sentences. Uses 80th percentile of distances as threshold.
+
+        Falls back to chunk_text() if embedding provider is unavailable or fails.
+        """
+        if self._embedding_provider is None:
+            return self.chunk_text(text)
+
+        if not text or not text.strip():
+            return []
+
+        sentences = self._split_into_sentences(text)
+        if len(sentences) <= 1:
+            return self.chunk_text(text)
+
+        try:
+            # Rolling window context for better embeddings
+            combined = self._combine_with_context(sentences)
+
+            # Batch embed all sentences (in chunks of 100 to avoid API limits)
+            embeddings = []
+            batch_size = 100
+            for i in range(0, len(combined), batch_size):
+                batch = combined[i:i + batch_size]
+                embeddings.extend(self._embedding_provider.embed_documents(batch))
+
+            # Calculate distances and find breakpoints
+            distances = self._calculate_cosine_distances(embeddings)
+            breakpoints = self._find_breakpoints(distances, percentile=80)
+
+            # Group sentences into chunks
+            chunks = []
+            start_idx = 0
+            char_offset = 0
+
+            for bp in breakpoints:
+                chunk_sentences = sentences[start_idx:bp + 1]
+                chunk_text = " ".join(chunk_sentences)
+
+                chunks.append(TextChunk(
+                    content=chunk_text,
+                    index=len(chunks),
+                    start_char=char_offset,
+                    end_char=char_offset + len(chunk_text),
+                ))
+
+                char_offset += len(chunk_text) + 1  # +1 for space
+                start_idx = bp + 1
+
+            # Final chunk
+            if start_idx < len(sentences):
+                chunk_sentences = sentences[start_idx:]
+                chunk_text = " ".join(chunk_sentences)
+                chunks.append(TextChunk(
+                    content=chunk_text,
+                    index=len(chunks),
+                    start_char=char_offset,
+                    end_char=char_offset + len(chunk_text),
+                ))
+
+            return chunks if chunks else self.chunk_text(text)
+
+        except Exception:
+            # Fallback on any embedding failure
+            return self.chunk_text(text)
 
     def chunk_text(self, text: str) -> List[TextChunk]:
         """
@@ -269,8 +396,11 @@ class ChunkingService:
                 seg.get("end", 0.0),
             ))
 
-        # Chunk the full text
-        chunks = self.chunk_text(full_text)
+        # Use semantic chunking if provider available, else character-based
+        if self._embedding_provider is not None:
+            chunks = self.chunk_semantically(full_text)
+        else:
+            chunks = self.chunk_text(full_text)
 
         # Map timestamps to chunks
         for chunk in chunks:

@@ -3,6 +3,7 @@ Embedding provider abstraction.
 Supports multiple embedding backends with automatic fallback.
 """
 from abc import ABC, abstractmethod
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 import os
 
@@ -41,6 +42,9 @@ class VoyageEmbedding(EmbeddingProvider):
         api_key = os.getenv("VOYAGE_API_KEY")
         if not api_key:
             raise ValueError("VOYAGE_API_KEY environment variable not set")
+        # voyage-3-large is natively 1024 dimensions
+        if dimensions != 1024:
+            raise ValueError(f"voyage-3-large requires dimensions=1024, got {dimensions}")
         self.client = voyageai.Client(api_key=api_key)
         self._model = model
         self._dimensions = dimensions
@@ -112,11 +116,14 @@ class OpenAIEmbedding(EmbeddingProvider):
 class BGEEmbedding(EmbeddingProvider):
     """BGE (HuggingFace) embedding provider - runs locally."""
 
-    def __init__(self, model: str = "BAAI/bge-m3"):
+    def __init__(self, model: str = "BAAI/bge-m3", dimensions: int = 1024):
         from sentence_transformers import SentenceTransformer
         self._model_name = model
         self.model = SentenceTransformer(model)
-        self._dimensions = self.model.get_sentence_embedding_dimension()
+        actual_dim = self.model.get_sentence_embedding_dimension()
+        if actual_dim != dimensions:
+            raise ValueError(f"Model {model} has {actual_dim} dimensions, expected {dimensions}")
+        self._dimensions = actual_dim
 
     @property
     def model_name(self) -> str:
@@ -138,8 +145,9 @@ class BGEEmbedding(EmbeddingProvider):
 class OllamaEmbedding(EmbeddingProvider):
     """Ollama embedding provider - runs locally via REST API."""
 
-    def __init__(self, model: str = "nomic-embed-text", dimensions: int = 768):
+    def __init__(self, model: str = "mxbai-embed-large", dimensions: int = 1024):
         import httpx
+        self._httpx = httpx  # Store for exception handling
         self._model = model
         self._dimensions = dimensions
         self._base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
@@ -151,6 +159,27 @@ class OllamaEmbedding(EmbeddingProvider):
             response.raise_for_status()
         except Exception as e:
             raise ValueError(f"Could not connect to Ollama at {self._base_url}: {e}")
+
+        # Probe model dimensions with a test embedding
+        try:
+            test_response = self._client.post(
+                f"{self._base_url}/api/embeddings",
+                json={"model": self._model, "prompt": "test"}
+            )
+            test_response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise ValueError(
+                    f"Model '{self._model}' not found. "
+                    f"Please run: ollama pull {self._model}"
+                ) from e
+            raise
+
+        actual_dim = len(test_response.json()["embedding"])
+        if actual_dim != dimensions:
+            raise ValueError(
+                f"Model {self._model} produces {actual_dim} dimensions, expected {dimensions}"
+            )
 
     @property
     def model_name(self) -> str:
@@ -169,9 +198,23 @@ class OllamaEmbedding(EmbeddingProvider):
         response.raise_for_status()
         return response.json()["embedding"]
 
-    def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # Ollama doesn't support batch embedding, so we iterate
-        return [self._embed_single(text) for text in texts]
+    def embed_documents(self, texts: List[str], max_workers: int = 5) -> List[List[float]]:
+        """Embed documents in parallel using thread pool."""
+        if not texts:
+            return []
+
+        results = [None] * len(texts)
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_idx = {
+                executor.submit(self._embed_single, text): i
+                for i, text in enumerate(texts)
+            }
+            for future in as_completed(future_to_idx):
+                idx = future_to_idx[future]
+                results[idx] = future.result()
+
+        return results
 
     def embed_query(self, text: str) -> List[float]:
         return self._embed_single(text)
@@ -196,7 +239,7 @@ def get_embedding_provider(
         "voyage": "voyage-3-large",
         "openai": "text-embedding-3-large",
         "bge": "BAAI/bge-m3",
-        "ollama": "nomic-embed-text",
+        "ollama": "mxbai-embed-large",
     }
 
     providers_to_try = []
@@ -225,9 +268,9 @@ def get_embedding_provider(
             elif p == "openai":
                 return OpenAIEmbedding(model=use_model or "text-embedding-3-large", dimensions=dimensions)
             elif p == "bge":
-                return BGEEmbedding(model=use_model or "BAAI/bge-m3")
+                return BGEEmbedding(model=use_model or "BAAI/bge-m3", dimensions=dimensions)
             elif p == "ollama":
-                return OllamaEmbedding(model=use_model or "nomic-embed-text", dimensions=dimensions)
+                return OllamaEmbedding(model=use_model or "mxbai-embed-large", dimensions=dimensions)
         except Exception as e:
             errors.append(f"{p}: {str(e)}")
             continue

@@ -260,6 +260,10 @@ class YouTubeIngestionService(IngestionService):
                 collections=collections,
             )
 
+            # Ensure chunking service has embedding provider for semantic chunking
+            if self._chunking_service._embedding_provider is None:
+                self._chunking_service._embedding_provider = self.embedding_provider
+
             # Chunk the content with timestamps
             if segments:
                 segment_dicts = [
