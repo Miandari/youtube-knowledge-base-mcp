@@ -48,6 +48,15 @@ class ContextConfig(BaseModel):
         return {"openai": "gpt-4o-mini", "ollama": "llama3.2:3b"}[self.provider]
 
 
+class RerankConfig(BaseModel):
+    """Cross-encoder reranking configuration."""
+    enabled: bool = True
+    model_name: str = "ms-marco-MiniLM-L-12-v2"  # Best precision (~34MB)
+    max_length: int = 256  # query + chunk tokens
+    candidate_multiplier: int = 5  # Fetch 5x candidates for reranking
+    cache_dir: str = "./opt/reranker"  # Local model cache
+
+
 class Settings(BaseModel):
     """Application settings."""
     # Paths
@@ -62,8 +71,6 @@ class Settings(BaseModel):
 
     # Search
     default_search_limit: int = 10
-    recency_boost_enabled: bool = True
-    recency_floor: float = 0.5  # Minimum weight for old content
 
     # Chunking
     chunk_size: int = 500
@@ -71,6 +78,9 @@ class Settings(BaseModel):
 
     # Contextual Retrieval
     context: ContextConfig = Field(default_factory=ContextConfig)
+
+    # Reranking
+    rerank: RerankConfig = Field(default_factory=RerankConfig)
 
     # API Keys (from environment)
     voyage_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("VOYAGE_API_KEY"))

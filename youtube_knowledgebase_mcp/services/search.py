@@ -1,12 +1,13 @@
 """
-Search service for hybrid search with recency weighting.
+Search service with two-stage retrieval and cross-encoder reranking.
 
-Orchestrates vector and full-text search, applies recency boosting,
-and handles result ranking and deduplication.
+Pipeline:
+1. Retrieve: Bi-encoder fetches high-recall candidates (5x limit)
+2. Rerank: Cross-encoder scores query-document pairs for precision
+3. Deduplicate: Remove near-duplicates (reranker scores relevance, not diversity)
 """
 import asyncio
-import math
-from datetime import datetime, timedelta
+import logging
 from typing import List, Optional
 
 from ..core.config import settings
@@ -15,15 +16,21 @@ from ..core.embeddings import get_embedding_provider, EmbeddingProvider
 from ..repositories.chunks import ChunkRepository
 from ..repositories.sources import SourceRepository
 
+logger = logging.getLogger(__name__)
+
+# Lazy import to avoid startup cost if reranking disabled
+Ranker = None
+RerankRequest = None
+
 
 class SearchService:
     """
     Service for searching the knowledge base.
 
     Features:
-    - Hybrid search (vector + full-text)
-    - Recency weighting (recent content boosted)
-    - Result deduplication
+    - Two-stage retrieval (bi-encoder + cross-encoder reranking)
+    - Hybrid search (vector + full-text via LanceDB RRF)
+    - Result deduplication for diversity
     - Source metadata enrichment
     """
 
@@ -56,6 +63,26 @@ class SearchService:
             )
         return self._embedding_provider
 
+    @property
+    def reranker(self):
+        """Lazy initialization of cross-encoder reranker."""
+        if not hasattr(self, '_reranker'):
+            self._reranker = None
+            if settings.rerank.enabled:
+                try:
+                    global Ranker, RerankRequest
+                    if Ranker is None:
+                        from flashrank import Ranker, RerankRequest
+                    self._reranker = Ranker(
+                        model_name=settings.rerank.model_name,
+                        max_length=settings.rerank.max_length,
+                        cache_dir=settings.rerank.cache_dir,
+                    )
+                    logger.info(f"Initialized reranker: {settings.rerank.model_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize reranker: {e}. Using vector scores only.")
+        return self._reranker
+
     def search(
         self,
         query: str,
@@ -64,11 +91,14 @@ class SearchService:
         source_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         collections: Optional[List[str]] = None,
-        recency_boost: Optional[bool] = None,
         hybrid: bool = True,
     ) -> List[SearchResult]:
         """
-        Search the knowledge base with hybrid search and optional recency weighting.
+        Three-stage search: retrieve candidates, rerank, then deduplicate.
+
+        Stage 1: Bi-encoder retrieves high-recall candidates (limit * multiplier)
+        Stage 2: Cross-encoder reranks for precision
+        Stage 3: Deduplicate for diversity (reranker scores relevance, not diversity)
 
         Args:
             query: The search query text
@@ -77,19 +107,18 @@ class SearchService:
             source_type: Optional source type filter
             tags: Optional tags filter
             collections: Optional collections filter
-            recency_boost: Whether to apply recency weighting (default from settings)
             hybrid: Whether to use hybrid search (vector + FTS) or just vector
 
         Returns:
             List of SearchResults sorted by final_score
         """
         limit = limit or settings.default_search_limit
-        recency_boost = recency_boost if recency_boost is not None else settings.recency_boost_enabled
+        candidate_limit = limit * settings.rerank.candidate_multiplier
 
         # Generate query embedding
         query_vector = self.embedding_provider.embed_query(query)
 
-        # Perform search
+        # === STAGE 1: Retrieve candidates ===
         if hybrid:
             results = self._chunk_repo.search(
                 query_vector=query_vector,
@@ -98,7 +127,7 @@ class SearchService:
                 source_type=source_type,
                 tags=tags,
                 collections=collections,
-                limit=limit * 2,  # Get extra for deduplication
+                limit=candidate_limit,
             )
         else:
             # Build where clause for vector-only search
@@ -113,7 +142,7 @@ class SearchService:
 
             results = self._chunk_repo.vector_search(
                 query_vector=query_vector,
-                limit=limit * 2,
+                limit=candidate_limit,
                 where=where_clause,
             )
 
@@ -123,63 +152,83 @@ class SearchService:
             if collections:
                 results = [r for r in results if any(c in r.chunk.collections for c in collections)]
 
-        # Apply recency weighting
-        if recency_boost:
-            results = self._apply_recency_weighting(results)
+        # === STAGE 2: Rerank with cross-encoder ===
+        if self.reranker and results:
+            results = self._rerank_results(query, results)
+        else:
+            # Fallback: use vector scores as final scores
+            for result in results:
+                result.final_score = result.score
+
+        # === STAGE 3: Deduplicate (AFTER reranking) ===
+        # CRITICAL: Reranker scores for RELEVANCE, not DIVERSITY.
+        # Without this, 5 near-duplicate relevant chunks would all appear at top.
+        results = self._deduplicate_results(results)
 
         # Enrich with source metadata
         results = self._enrich_results(results)
-
-        # Deduplicate by content similarity
-        results = self._deduplicate_results(results)
 
         # Sort by final score and limit
         results.sort(key=lambda r: r.final_score, reverse=True)
         return results[:limit]
 
-    def _apply_recency_weighting(
+    def _rerank_results(
         self,
+        query: str,
         results: List[SearchResult],
-        max_age_days: int = 365,
     ) -> List[SearchResult]:
         """
-        Apply recency weighting to search results.
+        Rerank results using cross-encoder.
 
-        Recent content gets boosted, older content is dampened (with a floor).
+        Key: If chunk has context field (from Contextual Retrieval),
+        prepend it for richer reranking.
 
         Args:
-            results: Search results to weight
-            max_age_days: Age at which content reaches minimum weight
+            query: The search query
+            results: Search results to rerank
 
         Returns:
-            Results with recency_weight and final_score updated
+            Results with updated final_score from cross-encoder
         """
-        now = datetime.utcnow()
+        global RerankRequest
+        if RerankRequest is None:
+            from flashrank import RerankRequest
 
+        # Build passages for reranker
+        passages = []
         for result in results:
-            # Get source creation date from chunk
-            created_at = result.chunk.created_at
+            chunk = result.chunk
 
-            # Calculate age in days
-            age = now - created_at
-            age_days = age.days
-
-            # Calculate recency weight using exponential decay
-            # Weight goes from 1.0 (new) to recency_floor (old)
-            if age_days <= 0:
-                weight = 1.0
-            elif age_days >= max_age_days:
-                weight = settings.recency_floor
+            # CRUCIAL: Use context if available (from Contextual Retrieval)
+            if chunk.context:
+                text = f"{chunk.context}\n\n{chunk.content}"
             else:
-                # Exponential decay from 1.0 to recency_floor
-                decay_rate = -math.log(settings.recency_floor) / max_age_days
-                weight = math.exp(-decay_rate * age_days)
-                weight = max(weight, settings.recency_floor)
+                text = chunk.content
 
-            result.recency_weight = weight
-            result.final_score = result.score * weight
+            passages.append({
+                "id": chunk.id,
+                "text": text,
+                "meta": {"original_score": result.score},
+            })
 
-        return results
+        # Rerank
+        rerank_request = RerankRequest(query=query, passages=passages)
+        reranked = self.reranker.rerank(rerank_request)
+
+        # Map back to SearchResult objects
+        id_to_result = {r.chunk.id: r for r in results}
+        reranked_results = []
+
+        for item in reranked:
+            result = id_to_result.get(item["id"])
+            if result:
+                # Update scores: cross-encoder score is the new final_score
+                result.score = item["meta"]["original_score"]  # Keep original
+                result.final_score = item["score"]  # Cross-encoder probability (0-1)
+                result.recency_weight = 1.0  # No longer used
+                reranked_results.append(result)
+
+        return reranked_results
 
     def _enrich_results(self, results: List[SearchResult]) -> List[SearchResult]:
         """
@@ -282,7 +331,6 @@ class SearchService:
             query=query,
             source_ids=[source_id],
             limit=limit,
-            recency_boost=False,  # Don't weight recency within single source
         )
 
     def similar_chunks(
@@ -334,7 +382,6 @@ class SearchService:
         source_type: Optional[str] = None,
         tags: Optional[List[str]] = None,
         collections: Optional[List[str]] = None,
-        recency_boost: Optional[bool] = None,
         hybrid: bool = True,
     ) -> List[SearchResult]:
         """
@@ -347,7 +394,6 @@ class SearchService:
             source_type: Optional source type filter
             tags: Optional tags filter
             collections: Optional collections filter
-            recency_boost: Whether to apply recency weighting (default from settings)
             hybrid: Whether to use hybrid search (vector + FTS) or just vector
 
         Returns:
@@ -363,7 +409,6 @@ class SearchService:
                 source_type=source_type,
                 tags=tags,
                 collections=collections,
-                recency_boost=recency_boost,
                 hybrid=hybrid,
             )
         )
