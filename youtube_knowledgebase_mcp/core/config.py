@@ -57,6 +57,21 @@ class RerankConfig(BaseModel):
     cache_dir: str = "./opt/reranker"  # Local model cache
 
 
+class HyDEConfig(BaseModel):
+    """HyDE (Hypothetical Document Embeddings) configuration."""
+    enabled: bool = True  # Bridges formal↔informal vocabulary gap
+    provider: Literal["openai", "ollama"] = "openai"
+    model: Optional[str] = None
+    max_tokens: int = 150
+    temperature: float = 0.7
+
+    def get_model_name(self) -> str:
+        """Return the actual model name for the provider."""
+        if self.model:
+            return self.model
+        return {"openai": "gpt-4o-mini", "ollama": "llama3.2:3b"}[self.provider]
+
+
 class Settings(BaseModel):
     """Application settings."""
     # Paths
@@ -81,6 +96,9 @@ class Settings(BaseModel):
 
     # Reranking
     rerank: RerankConfig = Field(default_factory=RerankConfig)
+
+    # HyDE (Hypothetical Document Embeddings)
+    hyde: HyDEConfig = Field(default_factory=HyDEConfig)
 
     # API Keys (from environment)
     voyage_api_key: Optional[str] = Field(default_factory=lambda: os.getenv("VOYAGE_API_KEY"))

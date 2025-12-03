@@ -18,9 +18,11 @@ from ..repositories.sources import SourceRepository
 
 logger = logging.getLogger(__name__)
 
-# Lazy import to avoid startup cost if reranking disabled
+# Lazy imports to avoid startup cost if features disabled
 Ranker = None
 RerankRequest = None
+HyDETransformer = None
+get_hyde_provider = None
 
 
 class SearchService:
@@ -83,6 +85,30 @@ class SearchService:
                     logger.warning(f"Failed to initialize reranker: {e}. Using vector scores only.")
         return self._reranker
 
+    @property
+    def hyde_transformer(self):
+        """Lazy initialization of HyDE transformer."""
+        if not hasattr(self, '_hyde_transformer'):
+            self._hyde_transformer = None
+            if settings.hyde.enabled:
+                try:
+                    global HyDETransformer, get_hyde_provider
+                    if HyDETransformer is None:
+                        from .hyde import HyDETransformer, get_hyde_provider
+                    provider = get_hyde_provider(
+                        provider=settings.hyde.provider,
+                        model=settings.hyde.get_model_name(),
+                        temperature=settings.hyde.temperature,
+                    )
+                    self._hyde_transformer = HyDETransformer(
+                        provider=provider,
+                        max_tokens=settings.hyde.max_tokens,
+                    )
+                    logger.info(f"Initialized HyDE transformer: {settings.hyde.provider}")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize HyDE: {e}")
+        return self._hyde_transformer
+
     def search(
         self,
         query: str,
@@ -115,8 +141,13 @@ class SearchService:
         limit = limit or settings.default_search_limit
         candidate_limit = limit * settings.rerank.candidate_multiplier
 
-        # Generate query embedding
-        query_vector = self.embedding_provider.embed_query(query)
+        # Transform query with HyDE if enabled (for embedding only)
+        embedding_query = query
+        if self.hyde_transformer:
+            embedding_query = self.hyde_transformer.transform(query)
+
+        # Generate query embedding (using transformed or original query)
+        query_vector = self.embedding_provider.embed_query(embedding_query)
 
         # === STAGE 1: Retrieve candidates ===
         if hybrid:
