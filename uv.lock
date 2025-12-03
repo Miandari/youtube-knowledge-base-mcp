@@ -1649,8 +1649,9 @@ wheels = [
 [[package]]
 name = "media-kb-mcp"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
+    { name = "click" },
     { name = "datasets" },
     { name = "flashrank" },
     { name = "httpx" },
@@ -1686,6 +1687,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "click", specifier = ">=8.0.0" },
     { name = "datasets" },
     { name = "flashrank", specifier = ">=0.2.0" },
     { name = "httpx" },

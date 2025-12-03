@@ -127,3 +127,13 @@ class StatsResult(BaseModel):
     unique_tags: int
     unique_collections: int
     embedding_model: str
+
+
+class LibraryStats(BaseModel):
+    """Library statistics for explore_library(view='stats')."""
+    total_sources: int
+    total_chunks: int
+    sources_by_type: Dict[str, int]
+    unique_tags: int
+    tags: List[str]
+    embedding_model: str

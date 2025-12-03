@@ -1,7 +1,9 @@
 """
-Organization service for managing tags, collections, and summaries.
+Organization service for managing tags and summaries.
 
 Provides high-level operations for organizing content in the knowledge base.
+Note: Collections feature has been removed from MCP tools but data remains
+in the database for backward compatibility.
 """
 from datetime import datetime
 from typing import List, Optional, Dict, Any
@@ -13,13 +15,13 @@ from ..repositories.chunks import ChunkRepository
 
 class OrganizationService:
     """
-    Service for organizing content with tags, collections, and summaries.
+    Service for organizing content with tags and summaries.
 
     Features:
     - Tag management (add, remove, list)
-    - Collection management (create, add/remove sources)
     - User summaries
     - Bulk operations
+    - Statistics
     """
 
     def __init__(
@@ -134,100 +136,6 @@ class OrganizationService:
         """
         return self._source_repo.list_all_tags()
 
-    # === Collection Management ===
-
-    def add_to_collection(
-        self,
-        source_id: str,
-        collection: str,
-    ) -> Optional[Source]:
-        """
-        Add a source to a collection.
-
-        Args:
-            source_id: The source identifier
-            collection: Collection name
-
-        Returns:
-            Updated Source or None if not found
-        """
-        source = self._source_repo.get(source_id)
-        if not source:
-            return None
-
-        # Add to collection (avoid duplicates)
-        if collection not in source.collections:
-            new_collections = source.collections + [collection]
-            source = self._source_repo.update(source_id, collections=new_collections)
-
-            # Update denormalized collections in chunks
-            self._update_chunk_collections(source_id, new_collections)
-
-        return source
-
-    def remove_from_collection(
-        self,
-        source_id: str,
-        collection: str,
-    ) -> Optional[Source]:
-        """
-        Remove a source from a collection.
-
-        Args:
-            source_id: The source identifier
-            collection: Collection name
-
-        Returns:
-            Updated Source or None if not found
-        """
-        source = self._source_repo.get(source_id)
-        if not source:
-            return None
-
-        if collection in source.collections:
-            new_collections = [c for c in source.collections if c != collection]
-            source = self._source_repo.update(source_id, collections=new_collections)
-
-            # Update denormalized collections in chunks
-            self._update_chunk_collections(source_id, new_collections)
-
-        return source
-
-    def _update_chunk_collections(self, source_id: str, collections: List[str]):
-        """Update denormalized collections in all chunks for a source."""
-        chunks = self._chunk_repo.get_by_source(source_id)
-        if not chunks:
-            return
-
-        # Delete and re-add chunks with updated collections
-        self._chunk_repo.delete_by_source(source_id)
-
-        for chunk in chunks:
-            chunk.collections = collections
-
-        self._chunk_repo.add(chunks)
-
-    def list_all_collections(self) -> List[str]:
-        """
-        Get all unique collections across all sources.
-
-        Returns:
-            Sorted list of unique collections
-        """
-        return self._source_repo.list_all_collections()
-
-    def get_collection_sources(self, collection: str) -> List[Source]:
-        """
-        Get all sources in a collection.
-
-        Args:
-            collection: Collection name
-
-        Returns:
-            List of Sources in the collection
-        """
-        return self._source_repo.list(collections=[collection])
-
     # === Summary Management ===
 
     def set_summary(
@@ -297,27 +205,6 @@ class OrganizationService:
                 updated += 1
         return updated
 
-    def bulk_add_to_collection(
-        self,
-        source_ids: List[str],
-        collection: str,
-    ) -> int:
-        """
-        Add multiple sources to a collection.
-
-        Args:
-            source_ids: List of source identifiers
-            collection: Collection name
-
-        Returns:
-            Number of sources updated
-        """
-        updated = 0
-        for source_id in source_ids:
-            if self.add_to_collection(source_id, collection):
-                updated += 1
-        return updated
-
     # === Statistics ===
 
     def get_stats(self) -> Dict[str, Any]:
@@ -325,14 +212,12 @@ class OrganizationService:
         Get organization statistics.
 
         Returns:
-            Dict with counts of sources, chunks, tags, collections
+            Dict with counts of sources, chunks, tags
         """
         return {
             "total_sources": self._source_repo.count(),
             "total_chunks": self._chunk_repo.count(),
             "sources_by_type": self._source_repo.count_by_type(),
             "unique_tags": len(self.list_all_tags()),
-            "unique_collections": len(self.list_all_collections()),
             "tags": self.list_all_tags(),
-            "collections": self.list_all_collections(),
         }

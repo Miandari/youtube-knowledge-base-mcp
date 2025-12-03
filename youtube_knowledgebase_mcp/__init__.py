@@ -1,27 +1,25 @@
 """
-Media Knowledge Base MCP Module
+YouTube Knowledge Base MCP Module
 
 This module provides tools for processing media transcripts, creating a searchable knowledge base,
 and retrieving information from content based on natural language queries.
+
+MCP Tools (4 consolidated, workflow-based tools):
+- process_video: Ingest YouTube videos with optional tags/summary
+- manage_source: Update tags and summaries
+- explore_library: Browse sources, tags, and stats
+- search: Semantic search
+
+Admin operations are in the CLI (kb command).
 """
 
 # Import the MCP instance and tools
 from .mcp_tools import (
     mcp,
-    process_youtube_video,
-    search_knowledge_base,
-    get_source,
-    list_sources,
-    add_tags,
-    remove_tags,
-    list_tags,
-    add_to_collection,
-    remove_from_collection,
-    list_collections,
-    set_summary,
-    get_summary,
-    get_status,
-    reset_knowledge_base,
+    process_video,
+    manage_source,
+    explore_library,
+    search,
 )
 
 # Import core components
@@ -37,6 +35,7 @@ from .core import (
     StatsResult,
     get_db,
 )
+from .core.models import LibraryStats
 
 # Import services
 from .services import (
@@ -63,21 +62,11 @@ from .youtube_transcript import (
 __all__ = [
     # MCP
     'mcp',
-    # Tools
-    'process_youtube_video',
-    'search_knowledge_base',
-    'get_source',
-    'list_sources',
-    'add_tags',
-    'remove_tags',
-    'list_tags',
-    'add_to_collection',
-    'remove_from_collection',
-    'list_collections',
-    'set_summary',
-    'get_summary',
-    'get_status',
-    'reset_knowledge_base',
+    # Tools (4 consolidated)
+    'process_video',
+    'manage_source',
+    'explore_library',
+    'search',
     # Core
     'settings',
     'Settings',
@@ -88,6 +77,7 @@ __all__ = [
     'SearchResults',
     'OperationResult',
     'StatsResult',
+    'LibraryStats',
     'get_db',
     # Services
     'SearchService',
