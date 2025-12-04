@@ -13,7 +13,7 @@ The key: it's an MCP server. Plug it into any LLM (Claude, GPT, local models) an
 - Extract transcripts from YouTube videos
 - Hybrid search (semantic + keyword)
 - Timestamped links to exact video moments
-- Organize with tags, collections, and notes
+- Organize with tags and notes
 - Multiple embedding providers (Voyage, OpenAI, local)
 
 ## Installation
@@ -70,31 +70,42 @@ Then ask Claude: *"Add this video to my knowledge base: [URL]"*
 See `demo.ipynb` for interactive examples.
 
 ```python
-from youtube_knowledgebase_mcp import process_youtube_video, search_knowledge_base
+from youtube_knowledgebase_mcp import process_video, search
 
 # Add a video
-result = await process_youtube_video("https://youtube.com/watch?v=...")
+result = await process_video("https://youtube.com/watch?v=...")
 
 # Search
-results = await search_knowledge_base("What is context engineering?")
+results = await search("What is context engineering?")
 for r in results.results:
     print(r.timestamp_link)  # Jump to exact moment
 ```
 
 ## MCP Tools
 
+4 workflow-based tools designed for LLM efficiency:
+
 | Tool | Description |
 |------|-------------|
-| `process_youtube_video` | Add a video to the knowledge base |
-| `search_knowledge_base` | Hybrid semantic + keyword search |
-| `get_source` | Get video metadata |
-| `list_sources` | List videos with filters |
-| `add_tags` / `remove_tags` | Organize with tags |
-| `add_to_collection` / `remove_from_collection` | Group into collections |
-| `set_summary` / `get_summary` | Add personal notes |
-| `list_tags` / `list_collections` | List all tags/collections |
-| `get_status` | Knowledge base statistics |
-| `reset_knowledge_base` | Clear all data |
+| `process_video` | Add a video to the knowledge base (with optional tags/summary) |
+| `manage_source` | Update tags and summary for a source |
+| `explore_library` | Browse sources, list tags, or get statistics |
+| `search` | Hybrid semantic + keyword search with reranking |
+
+## Developer CLI
+
+Administrative commands for database management (not exposed to LLMs):
+
+```bash
+uv run kb db stats           # Show database statistics
+uv run kb db reset --confirm # Reset database (destructive)
+uv run kb source list        # List all sources
+uv run kb source delete <id> # Delete a source
+uv run kb health             # System health check
+uv run kb import-urls <file> # Bulk import from file
+```
+
+Run `uv run kb --help` for all commands.
 
 ## Architecture
 
@@ -103,7 +114,8 @@ youtube_knowledgebase_mcp/
 ├── core/           # Config, models, database, embeddings
 ├── repositories/   # Data access layer (LanceDB)
 ├── services/       # Business logic (search, ingestion, organization)
-└── mcp_tools.py    # MCP tool definitions (thin wrappers)
+├── mcp_tools.py    # MCP tools (4 workflow-based tools)
+└── cli.py          # Developer CLI for admin operations
 ```
 
 ### Tech Stack
