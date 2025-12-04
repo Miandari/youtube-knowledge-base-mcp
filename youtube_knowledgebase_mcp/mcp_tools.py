@@ -9,8 +9,32 @@ This module exposes 4 high-level MCP tools designed for LLM efficiency:
 
 Administrative operations (reset, bulk import, etc.) are in cli.py.
 """
+import json
 import time
 from typing import List, Literal, Optional, Union
+
+
+def _parse_list_param(value: Optional[Union[str, List[str]]]) -> Optional[List[str]]:
+    """Parse a list parameter that might be a JSON-encoded string.
+
+    Some MCP clients send lists as JSON strings like '[\"a\", \"b\"]' instead of
+    actual lists. This helper handles both cases.
+    """
+    if value is None:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        # Try to parse as JSON
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+        # If it's a plain string, treat as single-item list
+        return [value] if value else None
+    return None
 
 from mcp.server.fastmcp import FastMCP
 
@@ -266,11 +290,15 @@ async def search(
     start = time.time()
     service = SearchService()
 
+    # Parse list params that might be JSON-encoded strings from some MCP clients
+    parsed_source_ids = _parse_list_param(source_ids)
+    parsed_tags = _parse_list_param(tags)
+
     results = await service.search_async(
         query,
         limit=limit,
-        source_ids=source_ids,
-        tags=tags,
+        source_ids=parsed_source_ids,
+        tags=parsed_tags,
     )
 
     elapsed = (time.time() - start) * 1000

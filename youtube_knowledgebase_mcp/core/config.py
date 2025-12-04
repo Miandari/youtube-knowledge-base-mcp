@@ -61,7 +61,8 @@ class EmbeddingConfig(BaseModel):
 
 class ContextConfig(BaseModel):
     """Contextual retrieval configuration."""
-    enabled: bool = True
+    # Disable via env var DISABLE_CONTEXTUAL_RETRIEVAL=true for faster ingestion
+    enabled: bool = Field(default_factory=lambda: os.getenv("DISABLE_CONTEXTUAL_RETRIEVAL", "").lower() != "true")
     provider: Literal["openai", "ollama"] = "openai"
     model: Optional[str] = None  # gpt-4o-mini for openai
     max_context_tokens: int = 100

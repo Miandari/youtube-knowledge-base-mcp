@@ -9,12 +9,18 @@ This module handles all YouTube transcript processing functionality, including:
 
 import os
 import re
+import sys
 import tempfile
 from typing import List, Dict, Any, Tuple, Optional
 from urllib.parse import urlparse, parse_qs
 
 # Import yt-dlp for direct YouTube integration
 import yt_dlp
+
+
+def _log(msg: str) -> None:
+    """Log to stderr to avoid breaking MCP JSON-RPC protocol on stdout."""
+    print(msg, file=sys.stderr)
 
 def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
     """
@@ -40,7 +46,7 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
         if not video_id:
             return "", f"Failed to extract video ID from URL: {youtube_url}"
         
-        print(f"Extracted video ID: {video_id}")
+        _log(f"Extracted video ID: {video_id}")
         
         # Create a temporary directory for downloads
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -52,8 +58,8 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
                 'subtitleslangs': ['en', 'en-US', 'en-GB'],
                 'subtitlesformat': 'vtt',
                 'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-                'quiet': False,  # Set to True to suppress console output
-                'no_warnings': False,
+                'quiet': True,  # Suppress stdout output for MCP compatibility
+                'no_warnings': True,
             }
             
             # Create yt-dlp object
@@ -61,9 +67,9 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
                 # Extract info to trigger subtitle download
                 try:
                     info = ydl.extract_info(youtube_url, download=True)
-                    print(f"Video info extracted: {info.get('title', 'Unknown title')}")
+                    _log(f"Video info extracted: {info.get('title', 'Unknown title')}")
                 except yt_dlp.utils.DownloadError as e:
-                    print(f"yt-dlp download error: {str(e)}")
+                    _log(f"yt-dlp download error: {str(e)}")
                     # Try to continue anyway, as sometimes subtitles are downloaded
                     # despite errors in the main extraction
             
@@ -76,7 +82,7 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
             if not subtitle_files:
                 return video_id, "No subtitle files found after extraction."
             
-            print(f"Found subtitle files: {subtitle_files}")
+            _log(f"Found subtitle files: {subtitle_files}")
             
             # Prioritize manual subtitles over auto-generated ones
             # Sort order: 1. manual en, 2. manual en-US, 3. manual en-GB, 4. auto en, ...
@@ -85,10 +91,10 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
             
             if manual_subs:
                 subtitle_file = os.path.join(temp_dir, manual_subs[0])
-                print(f"Using manual subtitle: {manual_subs[0]}")
+                _log(f"Using manual subtitle: {manual_subs[0]}")
             elif auto_subs:
                 subtitle_file = os.path.join(temp_dir, auto_subs[0])
-                print(f"Using auto-generated subtitle: {auto_subs[0]}")
+                _log(f"Using auto-generated subtitle: {auto_subs[0]}")
             else:
                 return video_id, "No usable subtitle files found."
             
@@ -104,7 +110,7 @@ def extract_youtube_transcript(youtube_url: str) -> Tuple[str, str]:
     except Exception as e:
         import traceback
         error_message = f"Error extracting transcript: {str(e)}\n{traceback.format_exc()}"
-        print(error_message)
+        _log(error_message)
         return "", error_message
 
 def process_webvtt_transcript(webvtt_content: str) -> Dict[str, Any]:
@@ -133,14 +139,14 @@ def process_webvtt_transcript(webvtt_content: str) -> Dict[str, Any]:
     # Check for WEBVTT header
     if "WEBVTT" not in webvtt_content:
         # Not a valid WebVTT file, log a warning but continue processing
-        print("Warning: Missing WEBVTT header in content. Attempting to process anyway.")
+        _log("Warning: Missing WEBVTT header in content. Attempting to process anyway.")
     
     # Try to parse the WebVTT content
     try:
         cues = parse_webvtt_content(webvtt_content)
     except Exception as e:
         # Parsing failed, return defaults with error info
-        print(f"Error parsing WebVTT content: {str(e)}")
+        _log(f"Error parsing WebVTT content: {str(e)}")
         return {
             "transcript": f"Error parsing WebVTT content: {str(e)}",
             "segments": [],
@@ -485,7 +491,7 @@ def get_youtube_metadata(youtube_url: str) -> Dict[str, Any]:
                 'has_subtitles': info.get('requested_subtitles') is not None,
             }
     except Exception as e:
-        print(f"Error extracting metadata: {str(e)}")
+        _log(f"Error extracting metadata: {str(e)}")
         return {
             'error': str(e),
             'video_id': '',

@@ -7,6 +7,7 @@ This script starts the MCP server with all the tools for processing video transc
 building a searchable knowledge base, and managing content collections.
 """
 
+import sys
 import dotenv
 
 # Import the MCP instance with all tools registered
@@ -18,7 +19,8 @@ dotenv.load_dotenv()
 
 def main():
     """Main entry point for the Media Knowledge Base MCP Server"""
-    print("Starting Media Knowledge Base MCP Server")
+    # Use stderr for logging - stdout is reserved for MCP JSON-RPC protocol
+    print("Starting Media Knowledge Base MCP Server", file=sys.stderr)
     mcp.run(transport='stdio')
 
 

@@ -50,8 +50,8 @@ class Chunk(BaseModel):
     content: str
     chunk_index: int
 
-    # Vector (populated during embedding)
-    vector: Optional[List[float]] = None
+    # Vector (populated during embedding) - excluded from JSON to reduce response size
+    vector: Optional[List[float]] = Field(default=None, exclude=True)
 
     # Timestamps (for time-based media)
     timestamp_start: Optional[float] = None  # seconds

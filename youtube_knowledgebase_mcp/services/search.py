@@ -201,7 +201,13 @@ class SearchService:
 
         # Sort by final score and limit
         results.sort(key=lambda r: r.final_score, reverse=True)
-        return results[:limit]
+        results = results[:limit]
+
+        # Strip vectors before returning (they're huge and not needed in results)
+        for result in results:
+            result.chunk.vector = None
+
+        return results
 
     def _rerank_results(
         self,
