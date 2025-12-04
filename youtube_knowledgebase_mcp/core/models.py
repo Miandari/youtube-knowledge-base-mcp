@@ -137,3 +137,4 @@ class LibraryStats(BaseModel):
     unique_tags: int
     tags: List[str]
     embedding_model: str
+    data_path: str  # Enables LLM to guide users on data location

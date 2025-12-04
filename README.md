@@ -99,6 +99,7 @@ Administrative commands for database management (not exposed to LLMs):
 ```bash
 uv run kb db stats           # Show database statistics
 uv run kb db reset --confirm # Reset database (destructive)
+uv run kb db migrate <path>  # Move database to new location
 uv run kb source list        # List all sources
 uv run kb source delete <id> # Delete a source
 uv run kb health             # System health check
@@ -106,6 +107,49 @@ uv run kb import-urls <file> # Bulk import from file
 ```
 
 Run `uv run kb --help` for all commands.
+
+## Configuration
+
+### Data Location
+
+By default, data is stored in your OS's standard application data directory:
+- **macOS**: `~/Library/Application Support/youtube-kb/`
+- **Linux**: `~/.local/share/youtube-kb/`
+- **Windows**: `%APPDATA%/youtube-kb/`
+
+> **Note**: If you have existing data in `./data/` from a previous version, it will continue to be used automatically.
+
+To use a custom location, set the `YOUTUBE_KB_DATA_DIR` environment variable:
+
+```bash
+export YOUTUBE_KB_DATA_DIR=/path/to/custom/location
+```
+
+Or in Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "youtube-kb": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/repo", "run", "youtube-kb"],
+      "env": {
+        "YOUTUBE_KB_DATA_DIR": "/custom/data/path"
+      }
+    }
+  }
+}
+```
+
+### Moving Your Database
+
+To move your database to a new location (e.g., Dropbox):
+
+```bash
+uv run kb db migrate ~/Dropbox/youtube-kb --confirm
+```
+
+Then follow the printed instructions to set the environment variable.
 
 ## Architecture
 

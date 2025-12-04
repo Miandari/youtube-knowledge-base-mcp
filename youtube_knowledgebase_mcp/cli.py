@@ -12,6 +12,7 @@ Usage:
 """
 import asyncio
 import json
+import shutil
 import sys
 from pathlib import Path
 from typing import Optional
@@ -104,6 +105,49 @@ def db_export(fmt: str, output: Optional[str]):
         click.echo(f"✅ Exported {len(sources)} sources to {output}")
     else:
         click.echo(json_output)
+
+
+@db.command("migrate")
+@click.argument("target_path", type=click.Path())
+@click.option("--confirm", is_flag=True, help="Confirm the migration")
+def db_migrate(target_path: str, confirm: bool):
+    """Move the database to a new location safely."""
+    current_path = settings.data_path
+    target = Path(target_path).expanduser().resolve()
+
+    if not current_path.exists():
+        click.echo(f"❌ No database found at {current_path}")
+        sys.exit(1)
+
+    if target.exists():
+        click.echo(f"❌ Target already exists: {target}")
+        click.echo("   Aborting to prevent overwrite.")
+        sys.exit(1)
+
+    if not confirm:
+        click.echo(f"📦 This will move your database:")
+        click.echo(f"   From: {current_path}")
+        click.echo(f"   To:   {target}")
+        click.echo("\nRun with --confirm to proceed.")
+        sys.exit(0)
+
+    click.echo(f"📦 Moving data from {current_path} to {target}...")
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(current_path), str(target))
+        click.echo("✅ Migration successful!")
+        click.echo("")
+        click.echo("Next steps:")
+        click.echo("1. Set this environment variable in your shell:")
+        click.echo(f"   export YOUTUBE_KB_DATA_DIR={target}")
+        click.echo("")
+        click.echo("2. Or add to Claude Desktop config:")
+        click.echo(f'   "env": {{ "YOUTUBE_KB_DATA_DIR": "{target}" }}')
+        click.echo("")
+        click.echo("3. Restart Claude Desktop")
+    except Exception as e:
+        click.echo(f"❌ Migration failed: {e}")
+        sys.exit(1)
 
 
 # === Source Commands ===
@@ -276,11 +320,14 @@ def show_config():
     """Show current configuration."""
     click.echo("\n⚙️  Configuration")
     click.echo("=" * 40)
+    click.echo(f"Data directory:    {settings.data_path}")
     click.echo(f"Database path:     {settings.db_path}")
     click.echo(f"Embedding model:   {settings.embedding.get_model_name()}")
     click.echo(f"Embedding dims:    {settings.embedding.dimensions}")
     click.echo(f"Rerank enabled:    {settings.rerank.enabled}")
     click.echo(f"HyDE enabled:      {settings.hyde.enabled}")
+    click.echo()
+    click.echo("To change data location, set YOUTUBE_KB_DATA_DIR environment variable.")
     click.echo()
 
 

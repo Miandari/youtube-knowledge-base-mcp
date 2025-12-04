@@ -216,6 +216,7 @@ def explore_library(
             unique_tags=stats["unique_tags"],
             tags=stats["tags"],
             embedding_model=settings.embedding.get_model_name(),
+            data_path=str(settings.data_path),
         )
 
     else:

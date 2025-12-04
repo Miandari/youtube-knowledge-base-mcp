@@ -7,8 +7,37 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, Field
 from dotenv import load_dotenv
+from platformdirs import user_data_dir
 
 load_dotenv()
+
+
+def get_default_data_dir() -> Path:
+    """
+    Get the data directory with legacy fallback precedence.
+
+    Priority:
+    1. YOUTUBE_KB_DATA_DIR env var (explicit user override)
+    2. ./data/ if it exists (legacy fallback for existing users)
+    3. OS-standard location (new installs)
+    """
+    # 1. Environment Variable (Explicit Override)
+    if env_dir := os.getenv("YOUTUBE_KB_DATA_DIR"):
+        path = Path(env_dir).expanduser()
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # 2. Legacy Fallback (The "Anti-Panic" Check)
+    # If running in a repo that already has data, stay there.
+    legacy_dir = Path.cwd() / "data"
+    if (legacy_dir / "knowledge.lance").exists():
+        return legacy_dir
+
+    # 3. OS Standard (The New Default for fresh installs)
+    # macOS: ~/Library/Application Support/youtube-kb/
+    # Linux: ~/.local/share/youtube-kb/
+    # Windows: %APPDATA%/youtube-kb/
+    return Path(user_data_dir("youtube-kb", ensure_exists=True))
 
 
 class EmbeddingConfig(BaseModel):
@@ -76,10 +105,10 @@ class Settings(BaseModel):
     """Application settings."""
     # Paths
     base_path: Path = Field(default_factory=lambda: Path(__file__).parent.parent)
-    data_path: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "data")
+    data_path: Path = Field(default_factory=get_default_data_dir)
 
     # Database
-    db_path: Path = Field(default_factory=lambda: Path(__file__).parent.parent.parent / "data" / "knowledge.lance")
+    db_path: Path = Field(default_factory=lambda: get_default_data_dir() / "knowledge.lance")
 
     # Embedding
     embedding: EmbeddingConfig = Field(default_factory=EmbeddingConfig)
