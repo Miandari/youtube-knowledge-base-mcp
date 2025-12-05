@@ -58,14 +58,11 @@ class Chunk(BaseModel):
     timestamp_end: Optional[float] = None
 
     # Denormalized source metadata (for efficient filtered search)
+    # NOTE: source_title removed - fetched from Source in search enrichment
+    # NOTE: collections removed - dead code, not used in MCP
     source_type: str = "youtube"
-    source_title: str = ""
     source_channel: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
-    collections: List[str] = Field(default_factory=list)
-
-    # Embedding metadata
-    embedding_model: str = ""
 
     # Contextual retrieval
     context: Optional[str] = None  # LLM-generated context for this chunk

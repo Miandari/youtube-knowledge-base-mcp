@@ -177,11 +177,10 @@ class SearchService:
                 where=where_clause,
             )
 
-            # Apply tag/collection filters in Python for vector-only search
+            # Apply tag filter in Python for vector-only search
+            # NOTE: collections filtering removed - collections not stored on chunks
             if tags:
                 results = [r for r in results if any(t in r.chunk.tags for t in tags)]
-            if collections:
-                results = [r for r in results if any(c in r.chunk.collections for c in collections)]
 
         # === STAGE 2: Rerank with cross-encoder ===
         if self.reranker and results:
@@ -275,7 +274,7 @@ class SearchService:
             results: Search results to enrich
 
         Returns:
-            Results with source_url and timestamp_link populated
+            Results with source_title, source_url and timestamp_link populated
         """
         # Cache source lookups
         source_cache = {}
@@ -291,6 +290,8 @@ class SearchService:
             source = source_cache.get(source_id)
 
             if source:
+                # Populate source metadata (source_title no longer stored on chunk)
+                result.source_title = source.title
                 result.source_url = source.url
 
                 # Generate timestamp link for YouTube

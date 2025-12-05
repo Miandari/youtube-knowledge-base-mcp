@@ -49,12 +49,10 @@ def get_chunks_schema(vector_dim: int = 1024) -> pa.Schema:
         pa.field("vector", pa.list_(pa.float32(), vector_dim)),
         pa.field("timestamp_start", pa.float64()),
         pa.field("timestamp_end", pa.float64()),
+        # Denormalized for filtering (source_title, collections, embedding_model removed)
         pa.field("source_type", pa.string()),
-        pa.field("source_title", pa.string()),
         pa.field("source_channel", pa.string()),
         pa.field("tags", pa.list_(pa.string())),
-        pa.field("collections", pa.list_(pa.string())),
-        pa.field("embedding_model", pa.string()),
         # Contextual retrieval fields
         pa.field("context", pa.string()),
         pa.field("context_model", pa.string()),

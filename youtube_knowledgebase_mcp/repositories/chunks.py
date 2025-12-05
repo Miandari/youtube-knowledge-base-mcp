@@ -33,12 +33,10 @@ class ChunkRepository:
             "vector": chunk.vector,
             "timestamp_start": chunk.timestamp_start,
             "timestamp_end": chunk.timestamp_end,
+            # Denormalized for filtering (source_title, collections, embedding_model removed)
             "source_type": chunk.source_type,
-            "source_title": chunk.source_title,
             "source_channel": chunk.source_channel,
             "tags": chunk.tags,
-            "collections": chunk.collections,
-            "embedding_model": chunk.embedding_model,
             # Contextual retrieval fields
             "context": chunk.context,
             "context_model": chunk.context_model,
@@ -59,12 +57,10 @@ class ChunkRepository:
             vector=record.get("vector"),
             timestamp_start=record.get("timestamp_start"),
             timestamp_end=record.get("timestamp_end"),
+            # Denormalized for filtering (source_title, collections, embedding_model removed)
             source_type=record.get("source_type", "youtube"),
-            source_title=record.get("source_title", ""),
             source_channel=record.get("source_channel"),
             tags=record.get("tags", []),
-            collections=record.get("collections", []),
-            embedding_model=record.get("embedding_model", ""),
             # Contextual retrieval fields
             context=record.get("context"),
             context_model=record.get("context_model"),
@@ -91,11 +87,11 @@ class ChunkRepository:
         records = [self._chunk_to_record(c) for c in chunks]
         self._table.add(records)
 
-        # Recreate FTS index after adding new content
+        # Update FTS index incrementally (replace=False avoids O(N²) rebuilds)
         try:
-            self._table.create_fts_index("content", replace=True)
+            self._table.create_fts_index("content", replace=False)
         except Exception:
-            pass  # Index creation may fail on empty table
+            pass  # Index already exists or table empty
 
         return chunks
 
@@ -214,10 +210,9 @@ class ChunkRepository:
         for r in results:
             chunk = self._record_to_chunk(r)
 
-            # Apply tag/collection filters in Python
+            # Apply tag filter in Python
+            # NOTE: collections filtering removed - collections not stored on chunks
             if tags and not any(t in chunk.tags for t in tags):
-                continue
-            if collections and not any(c in chunk.collections for c in collections):
                 continue
 
             # RRF/hybrid returns _relevance_score (higher is better)
@@ -240,7 +235,7 @@ class ChunkRepository:
                 score=score,
                 recency_weight=1.0,  # Will be adjusted by search service
                 final_score=score,
-                source_title=chunk.source_title,
+                source_title="",  # Populated by service layer from Source
                 source_url=None,  # Will be populated by service layer
                 timestamp_link=None,
             )
@@ -286,7 +281,7 @@ class ChunkRepository:
                 score=score,
                 recency_weight=1.0,
                 final_score=score,
-                source_title=chunk.source_title,
+                source_title="",  # Populated by service layer from Source
                 source_url=None,
                 timestamp_link=None,
             )
@@ -329,7 +324,7 @@ class ChunkRepository:
                 score=score,
                 recency_weight=1.0,
                 final_score=score,
-                source_title=chunk.source_title,
+                source_title="",  # Populated by service layer from Source
                 source_url=None,
                 timestamp_link=None,
             )

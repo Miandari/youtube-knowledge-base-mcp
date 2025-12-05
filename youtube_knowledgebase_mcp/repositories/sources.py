@@ -300,7 +300,13 @@ class SourceRepository:
         Returns:
             List of unique tags
         """
-        results = self._table.search().to_list()
+        # Use column projection to fetch only tags (avoids loading full source data)
+        try:
+            results = self._table.search().select(["tags"]).to_list()
+        except Exception:
+            # Fallback if select not supported
+            results = self._table.search().to_list()
+
         all_tags = set()
         for r in results:
             tags = r.get("tags", [])
@@ -315,7 +321,12 @@ class SourceRepository:
         Returns:
             List of unique collections
         """
-        results = self._table.search().to_list()
+        # Use column projection to fetch only collections
+        try:
+            results = self._table.search().select(["collections"]).to_list()
+        except Exception:
+            results = self._table.search().to_list()
+
         all_collections = set()
         for r in results:
             collections = r.get("collections", [])
@@ -330,7 +341,12 @@ class SourceRepository:
         Returns:
             Dict mapping source_type to count
         """
-        results = self._table.search().to_list()
+        # Use column projection to fetch only source_type
+        try:
+            results = self._table.search().select(["source_type"]).to_list()
+        except Exception:
+            results = self._table.search().to_list()
+
         counts: Dict[str, int] = {}
         for r in results:
             source_type = r.get("source_type", "unknown")

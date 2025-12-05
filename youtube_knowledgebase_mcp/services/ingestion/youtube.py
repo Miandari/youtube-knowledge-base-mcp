@@ -351,11 +351,8 @@ class YouTubeIngestionService(IngestionService):
                     timestamp_start=text_chunk.timestamp_start,
                     timestamp_end=text_chunk.timestamp_end,
                     source_type="youtube",
-                    source_title=source.title,
                     source_channel=source.channel,
                     tags=source.tags,
-                    collections=source.collections,
-                    embedding_model=self.embedding_provider.model_name,
                     # Contextual retrieval fields
                     context=chunk_contexts[i],
                     context_model=context_model,
