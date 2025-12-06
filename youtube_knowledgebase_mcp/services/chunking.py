@@ -3,7 +3,11 @@ Chunking service for splitting text into semantic chunks.
 
 Implements sentence-boundary aware splitting with configurable chunk size and overlap.
 Supports semantic chunking based on embedding similarity when an embedding provider is available.
+
+Cost Optimization: Uses local all-MiniLM-L6-v2 model for topic shift detection (FREE).
+The expensive Voyage/OpenAI embeddings are only used for final chunk vectors.
 """
+import logging
 import re
 from typing import List, Optional, Tuple, TYPE_CHECKING
 from dataclasses import dataclass
@@ -11,9 +15,12 @@ from dataclasses import dataclass
 import numpy as np
 
 from ..core.config import settings
+from ..core.embeddings import get_chunking_embedding_provider
 
 if TYPE_CHECKING:
     from ..core.embeddings import EmbeddingProvider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -35,6 +42,9 @@ class ChunkingService:
     When an embedding provider is available, uses semantic similarity to detect
     topic shifts and create more coherent chunks.
 
+    Cost Optimization: Uses local all-MiniLM-L6-v2 model for topic detection (FREE).
+    This is NOT the same as the final chunk embeddings (Voyage/OpenAI).
+
     Configurable chunk size (~500 chars default) and overlap (150 chars default).
     """
 
@@ -44,6 +54,7 @@ class ChunkingService:
         chunk_overlap: Optional[int] = None,
         embedding_provider: Optional["EmbeddingProvider"] = None,
         context_window_size: int = 1,
+        use_local_chunking: bool = True,
     ):
         """
         Initialize the chunking service.
@@ -51,14 +62,31 @@ class ChunkingService:
         Args:
             chunk_size: Target chunk size in characters (default from settings)
             chunk_overlap: Overlap between chunks in characters (default from settings)
-            embedding_provider: Provider for generating embeddings (enables semantic chunking)
+            embedding_provider: Provider for generating embeddings (enables semantic chunking).
+                               If None and use_local_chunking=True, uses local model.
             context_window_size: Number of sentences before/after to include when embedding.
                                  Default 1 means 3 sentences total. Set to 0 to disable.
+            use_local_chunking: If True, use free local model (all-MiniLM-L6-v2) for
+                               semantic chunking. If False, uses provided embedding_provider.
+                               Default True to save API costs.
         """
         self.chunk_size = chunk_size or settings.chunk_size
         self.chunk_overlap = chunk_overlap or settings.chunk_overlap
-        self._embedding_provider = embedding_provider
         self.context_window_size = context_window_size
+
+        # Determine which embedding provider to use for chunking
+        if embedding_provider is not None:
+            # Explicit provider passed - use it
+            self._embedding_provider = embedding_provider
+        elif use_local_chunking:
+            # Try to use free local model
+            self._embedding_provider = get_chunking_embedding_provider()
+            if self._embedding_provider:
+                logger.info(f"Using local model for semantic chunking: {self._embedding_provider.model_name}")
+            else:
+                logger.info("Local embedding not available, falling back to sentence-boundary chunking")
+        else:
+            self._embedding_provider = None
 
     def _split_into_sentences(self, text: str) -> List[str]:
         """

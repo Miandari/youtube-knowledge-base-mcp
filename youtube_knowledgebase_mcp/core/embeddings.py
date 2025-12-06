@@ -142,6 +142,57 @@ class BGEEmbedding(EmbeddingProvider):
         return embedding[0].tolist()
 
 
+class LocalChunkingEmbedding(EmbeddingProvider):
+    """
+    Lightweight local embedding for semantic chunking only.
+
+    Uses all-MiniLM-L6-v2 (~80MB) for topic shift detection.
+    Much cheaper than API calls for determining chunk boundaries.
+    NOT suitable for final chunk embeddings - use Voyage/OpenAI for that.
+    """
+
+    def __init__(self, model: str = "all-MiniLM-L6-v2"):
+        try:
+            from sentence_transformers import SentenceTransformer
+        except ImportError:
+            raise ImportError(
+                "sentence-transformers required for local chunking. "
+                "Install with: pip install sentence-transformers"
+            )
+        self._model_name = model
+        self.model = SentenceTransformer(model)
+        self._dimensions = self.model.get_sentence_embedding_dimension()
+
+    @property
+    def model_name(self) -> str:
+        return f"local:{self._model_name}"
+
+    @property
+    def dimensions(self) -> int:
+        return self._dimensions
+
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        embeddings = self.model.encode(texts, normalize_embeddings=True)
+        return embeddings.tolist()
+
+    def embed_query(self, text: str) -> List[float]:
+        embedding = self.model.encode([text], normalize_embeddings=True)
+        return embedding[0].tolist()
+
+
+def get_chunking_embedding_provider() -> Optional[EmbeddingProvider]:
+    """
+    Get a local embedding provider for semantic chunking.
+
+    Returns None if sentence-transformers is not installed,
+    allowing graceful fallback to sentence-boundary chunking.
+    """
+    try:
+        return LocalChunkingEmbedding()
+    except ImportError:
+        return None
+
+
 class OllamaEmbedding(EmbeddingProvider):
     """Ollama embedding provider - runs locally via REST API."""
 
@@ -227,13 +278,23 @@ def get_embedding_provider(
 ) -> EmbeddingProvider:
     """
     Factory function to get an embedding provider.
-    Falls back through providers if preferred one is unavailable.
 
-    Fallback order: voyage -> openai -> bge -> ollama
+    NO FALLBACK - fails immediately with helpful error if provider unavailable.
+    This prevents silent data corruption from mixing embeddings from different models.
 
-    Note: When falling back, the model parameter is ignored and the default
-    model for the fallback provider is used.
+    Args:
+        provider: The embedding provider to use (voyage, openai, bge, ollama)
+        model: Optional model name override
+        dimensions: Vector dimensions (default 1024)
+
+    Returns:
+        Configured EmbeddingProvider
+
+    Raises:
+        ConfigurationError: If the provider cannot be initialized (e.g., missing API key)
     """
+    from .config import ConfigurationError
+
     # Default models for each provider
     default_models = {
         "voyage": "voyage-3-large",
@@ -242,37 +303,53 @@ def get_embedding_provider(
         "ollama": "mxbai-embed-large",
     }
 
-    providers_to_try = []
+    use_model = model or default_models.get(provider, "")
 
-    # Build ordered list based on preference
-    if provider == "voyage":
-        providers_to_try = ["voyage", "openai", "bge", "ollama"]
-    elif provider == "openai":
-        providers_to_try = ["openai", "voyage", "bge", "ollama"]
-    elif provider == "bge":
-        providers_to_try = ["bge", "voyage", "openai", "ollama"]
-    elif provider == "ollama":
-        providers_to_try = ["ollama", "bge", "voyage", "openai"]
-    else:
-        providers_to_try = [provider, "voyage", "openai", "bge", "ollama"]
+    try:
+        if provider == "voyage":
+            if not os.getenv("VOYAGE_API_KEY"):
+                raise ConfigurationError(
+                    "VOYAGE_API_KEY not set.\n"
+                    "Either:\n"
+                    "  1. Set VOYAGE_API_KEY in your environment\n"
+                    "  2. Change EMBEDDING_PROVIDER to 'openai', 'bge', or 'ollama'"
+                )
+            return VoyageEmbedding(model=use_model, dimensions=dimensions)
 
-    errors = []
+        elif provider == "openai":
+            if not os.getenv("OPENAI_API_KEY"):
+                raise ConfigurationError(
+                    "OPENAI_API_KEY not set.\n"
+                    "Either:\n"
+                    "  1. Set OPENAI_API_KEY in your environment\n"
+                    "  2. Change EMBEDDING_PROVIDER to 'voyage', 'bge', or 'ollama'"
+                )
+            return OpenAIEmbedding(model=use_model, dimensions=dimensions)
 
-    for i, p in enumerate(providers_to_try):
-        try:
-            # Use provided model only for the preferred provider, default for fallbacks
-            use_model = model if (i == 0 and model) else default_models.get(p)
+        elif provider == "bge":
+            try:
+                return BGEEmbedding(model=use_model, dimensions=dimensions)
+            except ImportError:
+                raise ConfigurationError(
+                    "sentence-transformers not installed for BGE embeddings.\n"
+                    "Either:\n"
+                    "  1. Install: pip install sentence-transformers\n"
+                    "  2. Change EMBEDDING_PROVIDER to 'voyage' or 'openai'"
+                )
 
-            if p == "voyage":
-                return VoyageEmbedding(model=use_model or "voyage-3-large", dimensions=dimensions)
-            elif p == "openai":
-                return OpenAIEmbedding(model=use_model or "text-embedding-3-large", dimensions=dimensions)
-            elif p == "bge":
-                return BGEEmbedding(model=use_model or "BAAI/bge-m3", dimensions=dimensions)
-            elif p == "ollama":
-                return OllamaEmbedding(model=use_model or "mxbai-embed-large", dimensions=dimensions)
-        except Exception as e:
-            errors.append(f"{p}: {str(e)}")
-            continue
+        elif provider == "ollama":
+            return OllamaEmbedding(model=use_model, dimensions=dimensions)
 
-    raise RuntimeError(f"Could not initialize any embedding provider. Errors: {errors}")
+        else:
+            raise ConfigurationError(
+                f"Unknown embedding provider: '{provider}'.\n"
+                f"Valid options: voyage, openai, bge, ollama"
+            )
+
+    except ConfigurationError:
+        raise  # Re-raise our custom errors
+    except Exception as e:
+        raise ConfigurationError(
+            f"Failed to initialize {provider} embedding provider: {e}\n"
+            f"Check your configuration and try again."
+        )

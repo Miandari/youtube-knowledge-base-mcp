@@ -107,10 +107,10 @@ def db_export(fmt: str, output: Optional[str]):
         click.echo(json_output)
 
 
-@db.command("migrate")
+@db.command("migrate-path")
 @click.argument("target_path", type=click.Path())
 @click.option("--confirm", is_flag=True, help="Confirm the migration")
-def db_migrate(target_path: str, confirm: bool):
+def db_migrate_path(target_path: str, confirm: bool):
     """Move the database to a new location safely."""
     current_path = settings.data_path
     target = Path(target_path).expanduser().resolve()
@@ -148,6 +148,138 @@ def db_migrate(target_path: str, confirm: bool):
     except Exception as e:
         click.echo(f"❌ Migration failed: {e}")
         sys.exit(1)
+
+
+@db.command("migrate-embeddings")
+@click.option("--to", "target_provider", required=True,
+              type=click.Choice(["voyage", "openai", "bge", "ollama"]),
+              help="Target embedding provider")
+@click.option("--yes", is_flag=True, help="Skip confirmation prompt")
+@click.option("--batch-size", default=50, help="Batch size for re-embedding")
+def db_migrate_embeddings(target_provider: str, yes: bool, batch_size: int):
+    """Re-embed all chunks with a different provider.
+
+    This command migrates your knowledge base from one embedding provider
+    to another. Use this when you want to switch providers (e.g., from
+    Voyage to OpenAI) or when the database was accidentally created with
+    the wrong provider.
+
+    Examples:
+        kb db migrate-embeddings --to openai
+        kb db migrate-embeddings --to voyage --yes
+    """
+    from .core.embeddings import get_embedding_provider
+    from .core.config import ConfigurationError
+
+    db = get_db()
+
+    # Get current provider info
+    current_provider = db.get_metadata("embedding_provider")
+    chunk_count = db.chunks.count_rows()
+
+    if chunk_count == 0:
+        click.echo("No chunks to migrate.")
+        return
+
+    if current_provider == target_provider:
+        click.echo(f"Database already uses '{target_provider}'. Nothing to migrate.")
+        return
+
+    # Validate target provider is available
+    try:
+        test_provider = get_embedding_provider(
+            provider=target_provider,
+            model=None,
+            dimensions=settings.embedding.dimensions,
+        )
+    except ConfigurationError as e:
+        click.echo(f"❌ Target provider unavailable:\n{e}", err=True)
+        sys.exit(1)
+
+    # Cost estimate (rough)
+    cost_estimates = {
+        "voyage": 0.00013,   # ~$0.13 per 1M tokens, ~1000 tokens/chunk
+        "openai": 0.00013,   # ~$0.13 per 1M tokens for text-embedding-3-large
+        "bge": 0.0,          # Free (local)
+        "ollama": 0.0,       # Free (local)
+    }
+    estimated_cost = chunk_count * cost_estimates.get(target_provider, 0)
+
+    click.echo(f"\n🔄 Embedding Migration")
+    click.echo("=" * 50)
+    click.echo(f"Current provider:  {current_provider or 'unknown'}")
+    click.echo(f"Target provider:   {target_provider}")
+    click.echo(f"Chunks to migrate: {chunk_count}")
+    click.echo(f"Target model:      {test_provider.model_name}")
+    if estimated_cost > 0:
+        click.echo(f"Estimated cost:    ~${estimated_cost:.2f}")
+    else:
+        click.echo(f"Estimated cost:    FREE (local model)")
+    click.echo()
+
+    if not yes:
+        click.confirm("Proceed with migration?", abort=True)
+
+    # Perform migration
+    click.echo(f"\nMigrating {chunk_count} chunks in batches of {batch_size}...")
+
+    chunk_repo = ChunkRepository()
+    all_chunks = db.chunks.to_pandas()
+
+    success_count = 0
+    error_count = 0
+
+    # Process in batches
+    with click.progressbar(range(0, len(all_chunks), batch_size),
+                           label="Re-embedding") as batches:
+        for start_idx in batches:
+            batch_df = all_chunks.iloc[start_idx:start_idx + batch_size]
+            texts = batch_df["content"].tolist()
+
+            try:
+                # Generate new embeddings
+                new_embeddings = test_provider.embed_documents(texts)
+
+                # Update chunks in database
+                for i, (_, row) in enumerate(batch_df.iterrows()):
+                    chunk_id = row["id"]
+                    # LanceDB update via delete + add
+                    db.chunks.delete(f"id = '{chunk_id}'")
+                    db.chunks.add([{
+                        "id": row["id"],
+                        "source_id": row["source_id"],
+                        "content": row["content"],
+                        "chunk_index": row["chunk_index"],
+                        "vector": new_embeddings[i],
+                        "timestamp_start": row["timestamp_start"],
+                        "timestamp_end": row["timestamp_end"],
+                        "source_type": row["source_type"],
+                        "source_channel": row["source_channel"],
+                        "tags": row["tags"],
+                        "context": row.get("context"),
+                        "context_model": row.get("context_model"),
+                        "parent_id": row.get("parent_id"),
+                        "speakers": row.get("speakers", []),
+                        "chapter_index": row.get("chapter_index"),
+                        "created_at": row["created_at"],
+                    }])
+                    success_count += 1
+
+            except Exception as e:
+                click.echo(f"\n⚠️  Batch error at {start_idx}: {e}")
+                error_count += batch_size
+
+    # Update metadata
+    db.set_metadata("embedding_provider", target_provider)
+    db.set_metadata("embedding_model", test_provider.model_name)
+    db.set_metadata("embedding_dimensions", str(test_provider.dimensions))
+
+    click.echo()
+    click.echo(f"✅ Migration complete!")
+    click.echo(f"   Migrated: {success_count} chunks")
+    if error_count > 0:
+        click.echo(f"   Errors:   {error_count} chunks")
+    click.echo(f"   Provider: {target_provider} ({test_provider.model_name})")
 
 
 # === Source Commands ===
@@ -318,14 +450,36 @@ def list_tags():
 @cli.command("config")
 def show_config():
     """Show current configuration."""
+    db = get_db()
+    locked_provider = db.get_metadata("embedding_provider")
+    locked_model = db.get_metadata("embedding_model")
+
     click.echo("\n⚙️  Configuration")
     click.echo("=" * 40)
     click.echo(f"Data directory:    {settings.data_path}")
     click.echo(f"Database path:     {settings.db_path}")
-    click.echo(f"Embedding model:   {settings.embedding.get_model_name()}")
-    click.echo(f"Embedding dims:    {settings.embedding.dimensions}")
-    click.echo(f"Rerank enabled:    {settings.rerank.enabled}")
-    click.echo(f"HyDE enabled:      {settings.hyde.enabled}")
+
+    click.echo("\nEmbedding Configuration:")
+    click.echo(f"  Config provider: {settings.embedding.provider}")
+    click.echo(f"  Config model:    {settings.embedding.get_model_name()}")
+    click.echo(f"  Dimensions:      {settings.embedding.dimensions}")
+
+    if locked_provider:
+        click.echo(f"\nDatabase Lock (from first ingestion):")
+        click.echo(f"  Locked provider: {locked_provider}")
+        click.echo(f"  Locked model:    {locked_model or 'unknown'}")
+        if locked_provider != settings.embedding.provider:
+            click.echo(f"\n⚠️  WARNING: Config provider '{settings.embedding.provider}' != locked '{locked_provider}'")
+            click.echo(f"   Ingestion will fail. Either:")
+            click.echo(f"   1. Set EMBEDDING_PROVIDER={locked_provider}")
+            click.echo(f"   2. Run: kb db migrate-embeddings --to {settings.embedding.provider}")
+    else:
+        click.echo(f"\n  Database not locked (no data yet)")
+
+    click.echo(f"\nFeature Flags:")
+    click.echo(f"  Rerank enabled:  {settings.rerank.enabled}")
+    click.echo(f"  HyDE enabled:    {settings.hyde.enabled}")
+    click.echo(f"  Context enabled: {settings.context.enabled}")
     click.echo()
     click.echo("To change data location, set YOUTUBE_KB_DATA_DIR environment variable.")
     click.echo()
@@ -395,6 +549,23 @@ def health_check():
         checks_passed += 1
     except Exception as e:
         click.echo(f"❌ Embedding config error: {e}")
+
+    # Check embedding provider lock consistency
+    total_checks += 1
+    try:
+        locked_provider = db.get_metadata("embedding_provider")
+        if locked_provider:
+            if locked_provider == settings.embedding.provider:
+                click.echo(f"✅ Provider lock consistent: {locked_provider}")
+                checks_passed += 1
+            else:
+                click.echo(f"❌ Provider mismatch: config={settings.embedding.provider}, locked={locked_provider}")
+                click.echo(f"   Run: kb db migrate-embeddings --to {settings.embedding.provider}")
+        else:
+            click.echo("✅ No provider lock (fresh database)")
+            checks_passed += 1
+    except Exception as e:
+        click.echo(f"❌ Provider lock check failed: {e}")
 
     click.echo()
     if checks_passed == total_checks:

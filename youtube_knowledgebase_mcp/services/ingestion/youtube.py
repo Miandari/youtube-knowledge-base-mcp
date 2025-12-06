@@ -4,12 +4,14 @@ YouTube ingestion service.
 Processes YouTube videos into the knowledge base using existing transcript extraction.
 """
 import asyncio
+import logging
 import re
 from typing import Optional, List, Dict, Any
 from urllib.parse import urlparse, parse_qs
 
 from .base import IngestionService, IngestionResult
-from ...core.config import settings
+from ...core.config import settings, EmbeddingMismatchError
+from ...core.database import get_db
 from ...core.models import Source, Chunk
 from ...core.embeddings import get_embedding_provider, EmbeddingProvider
 from ...repositories.sources import SourceRepository
@@ -23,6 +25,8 @@ from ...youtube_transcript import (
     process_webvtt_transcript,
     get_youtube_metadata,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class YouTubeIngestionService(IngestionService):
@@ -95,6 +99,58 @@ class YouTubeIngestionService(IngestionService):
                     "Proceeding without contextual retrieval."
                 )
         return self._context_service
+
+    def _validate_embedding_provider(self) -> None:
+        """
+        Validate that the configured embedding provider matches the database.
+
+        Handles 3 cases:
+        1. Fresh database (no data, no metadata) - Lock to current provider
+        2. Legacy database (has data, no metadata) - Trust On First Use (TOFU)
+        3. Locked database - Validate provider matches or fail
+
+        Raises:
+            EmbeddingMismatchError: If provider doesn't match locked database
+        """
+        db = get_db()
+        db_provider = db.get_metadata("embedding_provider")
+        has_data = db.chunks.count_rows() > 0
+
+        current_provider = settings.embedding.provider
+        current_model = settings.embedding.get_model_name()
+
+        # Case 1: Fresh database (no data, no metadata)
+        if not has_data and not db_provider:
+            # Lock to current provider on first ingestion
+            db.set_metadata("embedding_provider", current_provider)
+            db.set_metadata("embedding_model", current_model)
+            db.set_metadata("embedding_dimensions", str(settings.embedding.dimensions))
+            logger.info(f"Initialized database with embedding provider: {current_provider}")
+            return
+
+        # Case 2: Legacy database (has data, no metadata) - TRUST ON FIRST USE
+        if has_data and not db_provider:
+            logger.warning(
+                f"Legacy database detected. Locking to current provider: {current_provider}. "
+                f"If this is incorrect, run: kb migrate-embeddings --to <correct_provider>"
+            )
+            db.set_metadata("embedding_provider", current_provider)
+            db.set_metadata("embedding_model", current_model)
+            db.set_metadata("embedding_dimensions", str(settings.embedding.dimensions))
+            return
+
+        # Case 3: Locked database - validate provider matches
+        if db_provider and db_provider != current_provider:
+            raise EmbeddingMismatchError(
+                f"Database was created with '{db_provider}' embeddings.\n"
+                f"Current config uses '{current_provider}'.\n\n"
+                f"Options:\n"
+                f"  1. Set EMBEDDING_PROVIDER={db_provider} to match the database\n"
+                f"  2. Run 'kb migrate-embeddings --to {current_provider}' to re-embed all chunks"
+            )
+
+        # Provider matches - all good
+        logger.debug(f"Embedding provider validated: {current_provider}")
 
     def validate_url(self, url: str) -> bool:
         """
@@ -225,6 +281,9 @@ class YouTubeIngestionService(IngestionService):
             )
 
         try:
+            # Validate embedding provider matches database (prevents silent corruption)
+            self._validate_embedding_provider()
+
             # Extract video ID
             video_id = self._extract_video_id(url)
             if not video_id:
@@ -288,9 +347,8 @@ class YouTubeIngestionService(IngestionService):
                 collections=collections,
             )
 
-            # Ensure chunking service has embedding provider for semantic chunking
-            if self._chunking_service._embedding_provider is None:
-                self._chunking_service._embedding_provider = self.embedding_provider
+            # NOTE: ChunkingService now uses local all-MiniLM-L6-v2 for topic detection (FREE).
+            # We do NOT pass self.embedding_provider (Voyage) to save API costs.
 
             # Chunk the content with timestamps
             if segments:

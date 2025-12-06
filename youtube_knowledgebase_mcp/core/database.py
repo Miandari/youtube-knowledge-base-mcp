@@ -19,6 +19,11 @@ from .config import settings
 logger = logging.getLogger(__name__)
 
 # Define PyArrow schemas for LanceDB tables
+METADATA_SCHEMA = pa.schema([
+    pa.field("key", pa.string()),
+    pa.field("value", pa.string()),
+])
+
 SOURCES_SCHEMA = pa.schema([
     pa.field("id", pa.string()),
     pa.field("source_type", pa.string()),
@@ -87,6 +92,10 @@ class Database:
         """Ensure required tables exist with FTS index for hybrid search."""
         existing_tables = self._db.table_names()
 
+        if "metadata" not in existing_tables:
+            # Create empty metadata table for database-wide settings
+            self._db.create_table("metadata", schema=METADATA_SCHEMA)
+
         if "sources" not in existing_tables:
             # Create empty sources table with schema
             self._db.create_table("sources", schema=SOURCES_SCHEMA)
@@ -153,6 +162,11 @@ class Database:
             logger.warning(f"Schema migration check failed: {e}")
 
     @property
+    def metadata(self):
+        """Get metadata table."""
+        return self._db.open_table("metadata")
+
+    @property
     def sources(self):
         """Get sources table."""
         return self._db.open_table("sources")
@@ -161,6 +175,41 @@ class Database:
     def chunks(self):
         """Get chunks table."""
         return self._db.open_table("chunks")
+
+    def get_metadata(self, key: str) -> Optional[str]:
+        """
+        Get a metadata value by key.
+
+        Args:
+            key: The metadata key
+
+        Returns:
+            The value if found, None otherwise
+        """
+        try:
+            results = self.metadata.search().where(f"key = '{key}'").limit(1).to_list()
+            if results:
+                return results[0]["value"]
+        except Exception:
+            pass
+        return None
+
+    def set_metadata(self, key: str, value: str) -> None:
+        """
+        Set a metadata value. Upserts (updates if exists, inserts if not).
+
+        Args:
+            key: The metadata key
+            value: The value to store
+        """
+        try:
+            # Try to delete existing key first
+            self.metadata.delete(f"key = '{key}'")
+        except Exception:
+            pass
+
+        # Insert new value
+        self.metadata.add([{"key": key, "value": value}])
 
     def reset(self):
         """Drop and recreate all tables. USE WITH CAUTION."""

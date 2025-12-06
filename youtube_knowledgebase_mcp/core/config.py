@@ -12,6 +12,17 @@ from platformdirs import user_data_dir
 load_dotenv()
 
 
+# Custom exceptions for embedding provider management
+class ConfigurationError(Exception):
+    """Raised when a required configuration is missing or invalid."""
+    pass
+
+
+class EmbeddingMismatchError(Exception):
+    """Raised when the configured embedding provider doesn't match the database."""
+    pass
+
+
 def get_default_data_dir() -> Path:
     """
     Get the data directory with legacy fallback precedence.
